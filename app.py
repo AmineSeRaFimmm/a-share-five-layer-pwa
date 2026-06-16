@@ -266,17 +266,47 @@ if latest_avix:
     latest_value = float(latest_avix.get("avix", 0.0) or 0.0)
     latest_quality = str(latest_avix.get("quality", "Close Mid"))
     latest_time = str(latest_avix.get("valuation_time", trade_date))
+    latest_source = str(latest_avix.get("source", ""))
+    latest_note = str(latest_avix.get("note", ""))
+    latest_trade_date = str(latest_avix.get("trade_date", trade_date))[:10]
+    hist_for_delta = avix_hist.copy()
+    one_day_delta = None
+    twenty_day_delta = None
+    if not hist_for_delta.empty and {"trade_date", "avix"}.issubset(hist_for_delta.columns):
+        hist_for_delta["trade_date"] = pd.to_datetime(hist_for_delta["trade_date"], errors="coerce")
+        hist_for_delta["avix"] = pd.to_numeric(hist_for_delta["avix"], errors="coerce")
+        hist_for_delta = hist_for_delta.dropna(subset=["trade_date", "avix"]).sort_values("trade_date")
+        if len(hist_for_delta) >= 2:
+            one_day_delta = float(hist_for_delta["avix"].iloc[-1] - hist_for_delta["avix"].iloc[-2])
+        if len(hist_for_delta) >= 21:
+            twenty_day_delta = float(hist_for_delta["avix"].iloc[-1] - hist_for_delta["avix"].iloc[-21])
     st.markdown(
         f"""
 <div class="metric-grid">
   {metric_card("AVIX", f"{latest_value:.2f}", latest_quality)}
+  {metric_card("交易日", latest_trade_date, latest_source or "CLOSE_MID")}
+  {metric_card("日变化", "-" if one_day_delta is None else f"{one_day_delta:+.2f}", "较上一交易日")}
+  {metric_card("20日变化", "-" if twenty_day_delta is None else f"{twenty_day_delta:+.2f}", "较20个样本前")}
+</div>
+<div class="metric-grid" style="margin-top:12px;">
   {metric_card("估值时间", latest_time[-8:-3] if len(latest_time) >= 16 else "-", latest_time)}
   {metric_card("近月期限", str(latest_avix.get("near_dte", "-")), str(latest_avix.get("near_expiry", "")))}
   {metric_card("次月期限", str(latest_avix.get("next_dte", "-")), str(latest_avix.get("next_expiry", "")))}
+  {metric_card("样本期权", f"{latest_avix.get('near_n_options', '-')}/{latest_avix.get('next_n_options', '-')}", "近月/次月")}
+</div>
+<div class="metric-grid" style="margin-top:12px;">
+  {metric_card("近月远期", "-" if latest_avix.get("near_forward") in [None, ""] else f"{float(latest_avix.get('near_forward')):.1f}", f"K0 {latest_avix.get('near_k0', '-')}" )}
+  {metric_card("次月远期", "-" if latest_avix.get("next_forward") in [None, ""] else f"{float(latest_avix.get('next_forward')):.1f}", f"K0 {latest_avix.get('next_k0', '-')}" )}
+  {metric_card("近月方差", "-" if latest_avix.get("near_var") in [None, ""] else f"{float(latest_avix.get('near_var')):.4f}", "near_var")}
+  {metric_card("次月方差", "-" if latest_avix.get("next_var") in [None, ""] else f"{float(latest_avix.get('next_var')):.4f}", "next_var")}
 </div>
 """,
         unsafe_allow_html=True,
     )
+    if latest_note:
+        st.caption(f"AVIX 质量说明：{latest_note}")
+    if avix.get("note"):
+        st.caption(str(avix.get("note")))
 elif avix.get("error"):
     st.caption(f"AVIX 暂不可用：{avix.get('error')}")
 else:
@@ -287,7 +317,7 @@ if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
     avix_hist["trade_date"] = pd.to_datetime(avix_hist["trade_date"], errors="coerce")
     avix_hist["label"] = avix_hist["trade_date"].dt.strftime("%Y-%m-%d")
     avix_hist["avix"] = pd.to_numeric(avix_hist["avix"], errors="coerce")
-    avix_hist = avix_hist.dropna(subset=["label", "avix"]).tail(120)
+    avix_hist = avix_hist.dropna(subset=["label", "avix"]).tail(260)
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -309,4 +339,26 @@ if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
         showlegend=False,
     )
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    detail_cols = [
+        "trade_date", "avix", "quality", "source", "near_dte", "next_dte",
+        "near_n_options", "next_n_options", "note",
+    ]
+    detail_cols = [c for c in detail_cols if c in avix_hist.columns]
+    with st.expander("AVIX 历史明细", expanded=False):
+        st.dataframe(
+            avix_hist[detail_cols].tail(20),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "trade_date": st.column_config.DateColumn("日期"),
+                "avix": st.column_config.NumberColumn("AVIX", format="%.2f"),
+                "quality": st.column_config.TextColumn("质量"),
+                "source": st.column_config.TextColumn("来源"),
+                "near_dte": st.column_config.NumberColumn("近月DTE"),
+                "next_dte": st.column_config.NumberColumn("次月DTE"),
+                "near_n_options": st.column_config.NumberColumn("近月样本"),
+                "next_n_options": st.column_config.NumberColumn("次月样本"),
+                "note": st.column_config.TextColumn("说明"),
+            },
+        )
 st.markdown("</div>", unsafe_allow_html=True)

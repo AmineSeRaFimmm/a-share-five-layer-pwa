@@ -199,6 +199,18 @@ def _build_recommendations(df: pd.DataFrame, history_file: Path) -> tuple[pd.Dat
 
 
 def _load_cached_avix() -> tuple[dict, pd.DataFrame]:
+    try:
+        df = load_avix_history()
+        if not df.empty and {"trade_date", "avix"}.issubset(df.columns):
+            df = df.copy()
+            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+            df = df.dropna(subset=["trade_date"]).sort_values("trade_date")
+            latest = df.iloc[-1].to_dict()
+            latest["quality"] = str(latest.get("quality", "历史缓存"))
+            return latest, df
+    except Exception:
+        pass
+
     for path in [DATA_DIR / "avix_300_close_mid.csv", DATA_DIR / "avix_300_hist_clean.csv"]:
         if not path.exists():
             continue
