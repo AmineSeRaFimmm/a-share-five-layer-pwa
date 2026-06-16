@@ -319,87 +319,56 @@ if not avix_signal_hist.empty:
     avix_signal_hist["execution_trade_date"] = pd.to_datetime(avix_signal_hist.get("execution_trade_date"), errors="coerce")
     avix_signal_hist = avix_signal_hist.dropna(subset=["trade_date"]).sort_values("trade_date")
 
-    def _flag_text(value: object) -> str:
-        return "触发" if bool(value) else "未触发"
-
-    def _render_avix_strategy(title: str, strategy: str) -> None:
-        if avix_signal_hist.empty:
-            st.caption("暂无信号历史")
-            return
-        latest_row = avix_signal_hist.iloc[-1]
-        signal_col = f"{strategy}_signal"
-        buy_col = f"{strategy}_buy"
-        sell_col = f"{strategy}_sell"
-        reason_col = f"{strategy}_sell_reason"
-        latest_signal = bool(latest_row.get(signal_col, False))
-        latest_buy = bool(latest_row.get(buy_col, False))
-        latest_sell = bool(latest_row.get(sell_col, False))
-        exec_day = latest_row.get("execution_trade_date")
-        exec_label = "-" if pd.isna(exec_day) else pd.Timestamp(exec_day).strftime("%Y-%m-%d")
-        exec_open = latest_row.get("execution_sse_open")
-        exec_note = "下一交易日开盘执行"
-        if pd.notna(exec_open):
-            exec_note = f"{exec_label} 开盘 {float(exec_open):.2f}"
-
-        st.markdown(
-            f"""
-<div class="metric-grid">
-  {metric_card(f"{title} 信号", _flag_text(latest_signal), "收盘后观察")}
-  {metric_card("买入执行", _flag_text(latest_buy), exec_note if latest_buy else "等待下一次触发")}
-  {metric_card("卖出执行", _flag_text(latest_sell), str(latest_row.get(reason_col, "")) or "无")}
-  {metric_card("上证收盘", f"{float(latest_row.get('sse_close', 0) or 0):.2f}", f"AVIX {float(latest_row.get('avix', 0) or 0):.2f}")}
-</div>
-""",
-            unsafe_allow_html=True,
-        )
-
-        cols = [
-            "trade_date", "avix", "sse_close", "sse_ret1", "sse_ret10",
-            signal_col, buy_col, sell_col, reason_col, "execution_trade_date", "execution_sse_open",
-        ]
-        cols = [c for c in cols if c in avix_signal_hist.columns]
-        recent = avix_signal_hist[
-            avix_signal_hist.get(buy_col, False).astype(bool)
-            | avix_signal_hist.get(sell_col, False).astype(bool)
-        ].tail(12)
-        if recent.empty:
-            st.caption("最近没有买卖执行标记。")
-        else:
-            st.dataframe(
-                recent[cols],
-                hide_index=True,
-                width="stretch",
-                column_config={
-                    "trade_date": st.column_config.DateColumn("信号日"),
-                    "avix": st.column_config.NumberColumn("AVIX", format="%.2f"),
-                    "sse_close": st.column_config.NumberColumn("上证收盘", format="%.2f"),
-                    "sse_ret1": st.column_config.NumberColumn("上证1日", format="%+.2%"),
-                    "sse_ret10": st.column_config.NumberColumn("上证10日", format="%+.2%"),
-                    signal_col: st.column_config.CheckboxColumn("原始信号"),
-                    buy_col: st.column_config.CheckboxColumn("买入"),
-                    sell_col: st.column_config.CheckboxColumn("卖出"),
-                    reason_col: st.column_config.TextColumn("卖出原因"),
-                    "execution_trade_date": st.column_config.DateColumn("T+1执行日"),
-                    "execution_sse_open": st.column_config.NumberColumn("T+1开盘", format="%.2f"),
-                },
-            )
-
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="section-title">AVIX S3 / S4 交易信号</div>', unsafe_allow_html=True)
-    s3_tab, s4_tab, combo_tab = st.tabs(["S3", "S4", "S3+S4"])
-    with s3_tab:
-        _render_avix_strategy("S3", "s3")
-    with s4_tab:
-        _render_avix_strategy("S4", "s4")
-    with combo_tab:
-        _render_avix_strategy("S3+S4", "s3_s4")
-
 if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
     avix_hist = avix_hist.copy()
     avix_hist["trade_date"] = pd.to_datetime(avix_hist["trade_date"], errors="coerce")
     avix_hist["label"] = avix_hist["trade_date"].dt.strftime("%Y-%m-%d")
     avix_hist["avix"] = pd.to_numeric(avix_hist["avix"], errors="coerce")
     avix_hist = avix_hist.dropna(subset=["label", "avix"]).sort_values("trade_date")
+    if not avix_signal_hist.empty:
+        for col in ["s3_buy", "s3_sell", "s4_buy", "s4_sell", "s3_s4_buy", "s3_s4_sell"]:
+            if col in avix_signal_hist.columns:
+                avix_signal_hist[col] = avix_signal_hist[col].astype(bool)
+        avix_signal_hist["label"] = avix_signal_hist["trade_date"].dt.strftime("%Y-%m-%d")
+        avix_signal_hist["avix"] = pd.to_numeric(avix_signal_hist["avix"], errors="coerce")
+
+    def _signal_trace(window_df: pd.DataFrame, strategy: str, action: str, name: str, color: str, symbol: str) -> go.Scatter:
+        if avix_signal_hist.empty:
+            marks = pd.DataFrame(columns=["label", "avix"])
+        else:
+            col = f"{strategy}_{action}"
+            marks = avix_signal_hist[avix_signal_hist.get(col, False)].copy() if col in avix_signal_hist.columns else pd.DataFrame()
+            if not marks.empty:
+                marks = marks[marks["trade_date"].isin(window_df["trade_date"])].copy()
+        custom = None
+        hover = "%{x}<br>%{fullData.name}<br>AVIX %{y:.2f}<extra></extra>"
+        if not marks.empty:
+            custom_cols = []
+            if action == "buy" and "execution_trade_date" in marks.columns:
+                marks["execution_label"] = pd.to_datetime(marks["execution_trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                custom_cols.append("execution_label")
+            if action == "buy" and "execution_sse_open" in marks.columns:
+                marks["execution_sse_open"] = pd.to_numeric(marks["execution_sse_open"], errors="coerce")
+                custom_cols.append("execution_sse_open")
+            reason_col = f"{strategy}_sell_reason"
+            if action == "sell" and reason_col in marks.columns:
+                custom_cols.append(reason_col)
+            if custom_cols:
+                custom = marks[custom_cols].fillna("").to_numpy()
+                if action == "buy":
+                    hover = "%{x}<br>%{fullData.name}<br>AVIX %{y:.2f}<br>T+1 %{customdata[0]} 开盘 %{customdata[1]:.2f}<extra></extra>"
+                else:
+                    hover = "%{x}<br>%{fullData.name}<br>AVIX %{y:.2f}<br>%{customdata[0]}<extra></extra>"
+        return go.Scatter(
+            x=marks["label"] if not marks.empty else [],
+            y=marks["avix"] if not marks.empty else [],
+            mode="markers",
+            name=name,
+            marker=dict(size=11, color=color, symbol=symbol, line=dict(width=1.6, color="white")),
+            customdata=custom,
+            hovertemplate=hover,
+        )
+
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="section-title">AVIX 历史区间</div>', unsafe_allow_html=True)
     windows = [
@@ -425,14 +394,46 @@ if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
                     hovertemplate="%{x}<br>AVIX %{y:.2f}<extra></extra>",
                 )
             )
+            fig.add_trace(_signal_trace(plot_df, "s3", "buy", "S3 买入", "#d92d20", "circle"))
+            fig.add_trace(_signal_trace(plot_df, "s3", "sell", "S3 卖出", "#d92d20", "triangle-down"))
+            fig.add_trace(_signal_trace(plot_df, "s4", "buy", "S4 买入", "#f79009", "circle"))
+            fig.add_trace(_signal_trace(plot_df, "s4", "sell", "S4 卖出", "#f79009", "triangle-down"))
+            fig.add_trace(_signal_trace(plot_df, "s3_s4", "buy", "S3+S4 买入", "#7a5af8", "circle"))
+            fig.add_trace(_signal_trace(plot_df, "s3_s4", "sell", "S3+S4 卖出", "#7a5af8", "triangle-down"))
+            max_avix = float(plot_df["avix"].max()) if not plot_df.empty else 80.0
+            y_upper = max(80.0, ((max_avix // 10) + 2) * 10)
+            trace_count = len(fig.data)
+            visible_all = [True] * trace_count
+            visible_hide = [True] + [False] * (trace_count - 1)
+            visible_s3 = [True, True, True, False, False, False, False]
+            visible_s4 = [True, False, False, True, True, False, False]
+            visible_combo = [True, False, False, False, False, True, True]
             fig.update_layout(
-                height=360,
+                height=430,
                 template="plotly_white",
-                margin=dict(l=0, r=0, t=10, b=0),
+                margin=dict(l=0, r=0, t=48, b=0),
                 hovermode="x unified",
                 xaxis=dict(type="category", nticks=8, gridcolor="#eef2f7"),
-                yaxis=dict(title="波动率点数", gridcolor="#eef2f7", zeroline=False),
-                showlegend=False,
+                yaxis=dict(title="波动率点数", range=[0, y_upper], dtick=10, gridcolor="#eef2f7", zeroline=False),
+                showlegend=True,
+                legend=dict(orientation="h", x=0.01, y=1.02, xanchor="left", yanchor="bottom", font=dict(size=11)),
+                updatemenus=[dict(
+                    type="buttons",
+                    direction="right",
+                    x=0.01,
+                    y=1.16,
+                    xanchor="left",
+                    yanchor="top",
+                    showactive=True,
+                    pad=dict(t=0, r=4),
+                    buttons=[
+                        dict(label="全部", method="update", args=[{"visible": visible_all}]),
+                        dict(label="S3", method="update", args=[{"visible": visible_s3}]),
+                        dict(label="S4", method="update", args=[{"visible": visible_s4}]),
+                        dict(label="S3+S4", method="update", args=[{"visible": visible_combo}]),
+                        dict(label="隐藏信号", method="update", args=[{"visible": visible_hide}]),
+                    ],
+                )],
             )
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
             st.caption(f"{label} · {len(plot_df)} 个交易样本")
