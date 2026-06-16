@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.streamlit/secrets.toml
+.venv/
+venv/
+env/
+
+# Keep generated market caches committed only when they are intentional outputs.
+# The workflow commits data/latest_snapshot.json, data/update_status.json,
+# data/history/, data/avix/, data/backtest/, and data/*.csv.
