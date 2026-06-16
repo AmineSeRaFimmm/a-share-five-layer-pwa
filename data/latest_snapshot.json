@@ -1,12 +1,12 @@
 {
   "trade_date": "2026-06-15",
-  "updated_at": "2026-06-16 15:35:33",
+  "updated_at": "2026-06-16 15:44:58",
   "status": "ready",
   "market_breadth": 80.64516129032258,
   "coverage_mean": 167.67741935483872,
   "market_environment": "震荡市",
   "market_heat": 0.083,
-  "top_risk": "医药生物",
+  "top_risk": "建筑材料",
   "top_opportunity": "轻工制造",
   "clarity_signal": {
     "buy": [],
@@ -22,18 +22,18 @@
   "s4_signal": {},
   "avix": {
     "latest": {
-      "valuation_time": "2026-06-16 14:42:52",
+      "valuation_time": "2026-06-16 15:44:58",
       "trade_date": "2026-06-16 00:00:00",
-      "avix": 19.9951,
-      "var30": 0.0399804179724686,
+      "avix": 20.0466,
+      "var30": 0.0401865240867416,
       "near_expiry": "2026-07-17",
       "next_expiry": "2026-08-21",
       "near_dte": 31,
       "next_dte": 66,
-      "near_var": 0.0400789929128717,
-      "next_var": 0.0416472306011028,
-      "near_forward": 4833.279915118927,
-      "next_forward": 4804.411334604896,
+      "near_var": 0.0402755748924355,
+      "next_var": 0.0416922922557464,
+      "near_forward": 4833.88063673142,
+      "next_forward": 4803.007728139702,
       "near_k0": 4800.0,
       "next_k0": 4800.0,
       "near_n_options": 22,
@@ -6003,18 +6003,18 @@
         "source": "CLOSE_MID"
       },
       {
-        "valuation_time": "2026-06-16 14:42:52",
+        "valuation_time": "2026-06-16 15:44:58",
         "trade_date": "2026-06-16 00:00:00",
-        "avix": 19.9951,
-        "var30": 0.0399804179724686,
+        "avix": 20.0466,
+        "var30": 0.0401865240867416,
         "near_expiry": "2026-07-17",
         "next_expiry": "2026-08-21",
         "near_dte": 31,
         "next_dte": 66,
-        "near_var": 0.0400789929128717,
-        "next_var": 0.0416472306011028,
-        "near_forward": 4833.279915118927,
-        "next_forward": 4804.411334604896,
+        "near_var": 0.0402755748924355,
+        "next_var": 0.0416922922557464,
+        "near_forward": 4833.88063673142,
+        "next_forward": 4803.007728139702,
         "near_k0": 4800.0,
         "next_k0": 4800.0,
         "near_n_options": 22,
@@ -6026,7 +6026,7 @@
         "source": "CLOSE_MID"
       }
     ],
-    "note": "本次跳过 AVIX 实时刷新，使用历史缓存"
+    "note": "AVIX 实时刷新超过 120 秒，使用历史缓存"
   },
   "sectors": [
     {
