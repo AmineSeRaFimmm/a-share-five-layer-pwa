@@ -21,6 +21,7 @@ AVIX_HIST_FILE = DATA_DIR / "avix_300_hist_clean.csv"
 AVIX_RAW_CLOSE_FILE = DATA_DIR / "avix_300_raw_close.csv"
 AVIX_QVIX_FALLBACK_FILE = DATA_DIR / "avix_300_qvix_fallback.csv"
 AVIX_CONTRACT_CACHE_FILE = DATA_DIR / "io_option_daily_cache.csv"
+AVIX_SSE_SIGNAL_FILE = DATA_DIR / "avix_s3_s4_signals.csv"
 
 
 @dataclass
@@ -1072,3 +1073,133 @@ def load_avix_history() -> pd.DataFrame:
         .drop(columns=["_priority"])
     )
     return hist.reset_index(drop=True)
+
+
+def add_s3_s4_signals(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy().sort_values("trade_date")
+
+    out["sse_ret1"] = out["sse_close"] / out["sse_close"].shift(1) - 1
+    out["sse_ret10"] = out["sse_close"] / out["sse_close"].shift(10) - 1
+    out["sse_ma5"] = out["sse_close"].rolling(5).mean()
+    out["sse_ma10"] = out["sse_close"].rolling(10).mean()
+    out["sse_prev_close"] = out["sse_close"].shift(1)
+    out["sse_prev_ma5"] = out["sse_ma5"].shift(1)
+
+    out["s3_signal"] = (
+        (out["avix"] >= 25)
+        & (out["sse_ret10"] <= -0.04)
+        & (out["sse_ret1"] > 0)
+    )
+
+    out["s4_signal"] = (
+        (out["avix"] >= 22)
+        & (out["sse_close"] > out["sse_ma5"])
+        & (out["sse_prev_close"] <= out["sse_prev_ma5"])
+    )
+
+    out["s3_s4_signal"] = out["s3_signal"] | out["s4_signal"]
+
+    return out
+
+
+def add_trade_signals(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy().sort_values("trade_date").reset_index(drop=True)
+
+    for col in [
+        "s3_buy", "s3_sell",
+        "s4_buy", "s4_sell",
+        "s3_s4_buy", "s3_s4_sell",
+    ]:
+        out[col] = False
+
+    out["s3_sell_reason"] = ""
+    out["s4_sell_reason"] = ""
+    out["s3_s4_sell_reason"] = ""
+
+    def run_strategy(strategy: str) -> None:
+        holding = False
+        buy_price = None
+        buy_i = -1
+
+        for i in range(len(out) - 1):
+            row = out.iloc[i]
+
+            if not holding:
+                if bool(row[f"{strategy}_signal"]):
+                    out.at[i, f"{strategy}_buy"] = True
+                    buy_price = float(out.iloc[i + 1]["sse_open"])
+                    buy_i = i + 1
+                    holding = True
+                continue
+
+            current_ret = float(row["sse_close"]) / buy_price - 1
+            hold_days = i - buy_i + 1
+            reason = ""
+
+            if strategy == "s3":
+                if float(row["avix"]) < 20:
+                    reason = "AVIX<20"
+                elif current_ret >= 0.12:
+                    reason = "止盈12%"
+                elif current_ret <= -0.07:
+                    reason = "止损7%"
+                elif hold_days >= 80:
+                    reason = "持仓80日"
+
+            elif strategy == "s4":
+                if float(row["avix"]) < 20:
+                    reason = "AVIX<20"
+
+            elif strategy == "s3_s4":
+                if float(row["avix"]) < 20:
+                    reason = "AVIX<20"
+
+            if reason:
+                out.at[i, f"{strategy}_sell"] = True
+                out.at[i, f"{strategy}_sell_reason"] = reason
+                holding = False
+
+    run_strategy("s3")
+    run_strategy("s4")
+    run_strategy("s3_s4")
+
+    return out
+
+
+def load_sse_index_history() -> pd.DataFrame:
+    raw = ak.stock_zh_index_daily(symbol="sh000001")
+    if raw is None or raw.empty:
+        raise ValueError("上证指数日线为空，无法生成 S3/S4 信号")
+    out = raw.copy()
+    out["trade_date"] = pd.to_datetime(out["date"], errors="coerce")
+    out["sse_open"] = pd.to_numeric(out["open"], errors="coerce")
+    out["sse_close"] = pd.to_numeric(out["close"], errors="coerce")
+    out = out.dropna(subset=["trade_date", "sse_open", "sse_close"])
+    out = out[["trade_date", "sse_open", "sse_close"]].sort_values("trade_date")
+    return out.reset_index(drop=True)
+
+
+def build_avix_s3_s4_signal_history(avix_hist: pd.DataFrame | None = None) -> pd.DataFrame:
+    if avix_hist is None:
+        avix_hist = load_avix_history()
+    if avix_hist is None or avix_hist.empty:
+        return pd.DataFrame()
+
+    avix = avix_hist.copy()
+    avix["trade_date"] = pd.to_datetime(avix["trade_date"], errors="coerce")
+    avix["avix"] = pd.to_numeric(avix["avix"], errors="coerce")
+    avix = avix.dropna(subset=["trade_date", "avix"]).sort_values("trade_date")
+    if avix.empty:
+        return pd.DataFrame()
+
+    sse = load_sse_index_history()
+    merged = avix.merge(sse, on="trade_date", how="left")
+    merged = merged.dropna(subset=["sse_open", "sse_close"]).copy()
+    if merged.empty:
+        return pd.DataFrame()
+
+    out = add_trade_signals(add_s3_s4_signals(merged))
+    out["execution_trade_date"] = out["trade_date"].shift(-1)
+    out["execution_sse_open"] = out["sse_open"].shift(-1)
+    out.to_csv(AVIX_SSE_SIGNAL_FILE, index=False, encoding="utf-8-sig")
+    return out

@@ -262,6 +262,7 @@ st.markdown('<div class="panel"><div class="section-title">AVIX 指数</div>', u
 avix = snapshot.get("avix", {}) or {}
 latest_avix = avix.get("latest") or {}
 avix_hist = pd.DataFrame(avix.get("history", []))
+avix_signal_hist = pd.DataFrame(avix.get("signal_history", []))
 if latest_avix:
     latest_value = float(latest_avix.get("avix", 0.0) or 0.0)
     latest_quality = str(latest_avix.get("quality", "Close Mid"))
@@ -312,33 +313,129 @@ elif avix.get("error"):
 else:
     st.caption("暂无 AVIX 快照")
 
+if not avix_signal_hist.empty:
+    avix_signal_hist = avix_signal_hist.copy()
+    avix_signal_hist["trade_date"] = pd.to_datetime(avix_signal_hist["trade_date"], errors="coerce")
+    avix_signal_hist["execution_trade_date"] = pd.to_datetime(avix_signal_hist.get("execution_trade_date"), errors="coerce")
+    avix_signal_hist = avix_signal_hist.dropna(subset=["trade_date"]).sort_values("trade_date")
+
+    def _flag_text(value: object) -> str:
+        return "触发" if bool(value) else "未触发"
+
+    def _render_avix_strategy(title: str, strategy: str) -> None:
+        if avix_signal_hist.empty:
+            st.caption("暂无信号历史")
+            return
+        latest_row = avix_signal_hist.iloc[-1]
+        signal_col = f"{strategy}_signal"
+        buy_col = f"{strategy}_buy"
+        sell_col = f"{strategy}_sell"
+        reason_col = f"{strategy}_sell_reason"
+        latest_signal = bool(latest_row.get(signal_col, False))
+        latest_buy = bool(latest_row.get(buy_col, False))
+        latest_sell = bool(latest_row.get(sell_col, False))
+        exec_day = latest_row.get("execution_trade_date")
+        exec_label = "-" if pd.isna(exec_day) else pd.Timestamp(exec_day).strftime("%Y-%m-%d")
+        exec_open = latest_row.get("execution_sse_open")
+        exec_note = "下一交易日开盘执行"
+        if pd.notna(exec_open):
+            exec_note = f"{exec_label} 开盘 {float(exec_open):.2f}"
+
+        st.markdown(
+            f"""
+<div class="metric-grid">
+  {metric_card(f"{title} 信号", _flag_text(latest_signal), "收盘后观察")}
+  {metric_card("买入执行", _flag_text(latest_buy), exec_note if latest_buy else "等待下一次触发")}
+  {metric_card("卖出执行", _flag_text(latest_sell), str(latest_row.get(reason_col, "")) or "无")}
+  {metric_card("上证收盘", f"{float(latest_row.get('sse_close', 0) or 0):.2f}", f"AVIX {float(latest_row.get('avix', 0) or 0):.2f}")}
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+        cols = [
+            "trade_date", "avix", "sse_close", "sse_ret1", "sse_ret10",
+            signal_col, buy_col, sell_col, reason_col, "execution_trade_date", "execution_sse_open",
+        ]
+        cols = [c for c in cols if c in avix_signal_hist.columns]
+        recent = avix_signal_hist[
+            avix_signal_hist.get(buy_col, False).astype(bool)
+            | avix_signal_hist.get(sell_col, False).astype(bool)
+        ].tail(12)
+        if recent.empty:
+            st.caption("最近没有买卖执行标记。")
+        else:
+            st.dataframe(
+                recent[cols],
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "trade_date": st.column_config.DateColumn("信号日"),
+                    "avix": st.column_config.NumberColumn("AVIX", format="%.2f"),
+                    "sse_close": st.column_config.NumberColumn("上证收盘", format="%.2f"),
+                    "sse_ret1": st.column_config.NumberColumn("上证1日", format="%+.2%"),
+                    "sse_ret10": st.column_config.NumberColumn("上证10日", format="%+.2%"),
+                    signal_col: st.column_config.CheckboxColumn("原始信号"),
+                    buy_col: st.column_config.CheckboxColumn("买入"),
+                    sell_col: st.column_config.CheckboxColumn("卖出"),
+                    reason_col: st.column_config.TextColumn("卖出原因"),
+                    "execution_trade_date": st.column_config.DateColumn("T+1执行日"),
+                    "execution_sse_open": st.column_config.NumberColumn("T+1开盘", format="%.2f"),
+                },
+            )
+
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-title">AVIX S3 / S4 交易信号</div>', unsafe_allow_html=True)
+    s3_tab, s4_tab, combo_tab = st.tabs(["S3", "S4", "S3+S4"])
+    with s3_tab:
+        _render_avix_strategy("S3", "s3")
+    with s4_tab:
+        _render_avix_strategy("S4", "s4")
+    with combo_tab:
+        _render_avix_strategy("S3+S4", "s3_s4")
+
 if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
     avix_hist = avix_hist.copy()
     avix_hist["trade_date"] = pd.to_datetime(avix_hist["trade_date"], errors="coerce")
     avix_hist["label"] = avix_hist["trade_date"].dt.strftime("%Y-%m-%d")
     avix_hist["avix"] = pd.to_numeric(avix_hist["avix"], errors="coerce")
-    avix_hist = avix_hist.dropna(subset=["label", "avix"]).tail(260)
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=avix_hist["label"],
-            y=avix_hist["avix"],
-            mode="lines",
-            name="AVIX",
-            line=dict(color="#1f5eff", width=2.4),
-            hovertemplate="%{x}<br>AVIX %{y:.2f}<extra></extra>",
-        )
-    )
-    fig.update_layout(
-        height=360,
-        template="plotly_white",
-        margin=dict(l=0, r=0, t=10, b=0),
-        hovermode="x unified",
-        xaxis=dict(type="category", nticks=8, gridcolor="#eef2f7"),
-        yaxis=dict(title="波动率点数", gridcolor="#eef2f7", zeroline=False),
-        showlegend=False,
-    )
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    avix_hist = avix_hist.dropna(subset=["label", "avix"]).sort_values("trade_date")
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-title">AVIX 历史区间</div>', unsafe_allow_html=True)
+    windows = [
+        ("1个月", 21),
+        ("3个月", 63),
+        ("6个月", 126),
+        ("1年", 252),
+        ("3年", 756),
+        ("5年", 1260),
+    ]
+    window_tabs = st.tabs([label for label, _ in windows])
+    for tab, (label, size) in zip(window_tabs, windows):
+        with tab:
+            plot_df = avix_hist.tail(size)
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=plot_df["label"],
+                    y=plot_df["avix"],
+                    mode="lines",
+                    name="AVIX",
+                    line=dict(color="#1f5eff", width=2.4),
+                    hovertemplate="%{x}<br>AVIX %{y:.2f}<extra></extra>",
+                )
+            )
+            fig.update_layout(
+                height=360,
+                template="plotly_white",
+                margin=dict(l=0, r=0, t=10, b=0),
+                hovermode="x unified",
+                xaxis=dict(type="category", nticks=8, gridcolor="#eef2f7"),
+                yaxis=dict(title="波动率点数", gridcolor="#eef2f7", zeroline=False),
+                showlegend=False,
+            )
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+            st.caption(f"{label} · {len(plot_df)} 个交易样本")
     detail_cols = [
         "trade_date", "avix", "quality", "source", "near_dte", "next_dte",
         "near_n_options", "next_n_options", "note",

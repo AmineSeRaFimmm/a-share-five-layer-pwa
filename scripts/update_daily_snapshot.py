@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import multiprocessing as mp
 import os
 import sys
 from datetime import datetime, time as dt_time
@@ -20,7 +19,7 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("NO_PROXY", "*")
 os.environ.setdefault("SW_PROCESSED_CACHE_TTL_SECONDS", "0")
 
-from avix_utils import calculate_and_store_avix, load_avix_history  # noqa: E402
+from avix_utils import calculate_and_store_avix, load_avix_history, build_avix_s3_s4_signal_history  # noqa: E402
 from ui_theme import clean_signal  # noqa: E402
 from utils import (  # noqa: E402
     SW_CODE_MAPPING,
@@ -48,6 +47,11 @@ MAX_RISK = 55.0
 
 
 def _json_default(value):
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
     if isinstance(value, (np.integer,)):
         return int(value)
     if isinstance(value, (np.floating,)):
@@ -56,11 +60,6 @@ def _json_default(value):
         return value.tolist()
     if isinstance(value, (pd.Timestamp, datetime)):
         return value.strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        if pd.isna(value):
-            return None
-    except Exception:
-        pass
     return value
 
 
@@ -229,54 +228,27 @@ def _load_cached_avix() -> tuple[dict, pd.DataFrame]:
     return {}, pd.DataFrame()
 
 
-def _avix_worker(queue: mp.Queue) -> None:
-    latest = calculate_and_store_avix()
-    avix_hist = load_avix_history()
-    queue.put({
+def _avix_payload_from_history(latest: dict | None, avix_hist: pd.DataFrame) -> dict:
+    signal_hist = build_avix_s3_s4_signal_history(avix_hist)
+    if signal_hist.empty:
+        raise ValueError("AVIX S3/S4 信号历史为空")
+    return {
         "latest": latest or {},
-        "history": avix_hist.tail(260).to_dict(orient="records") if not avix_hist.empty else [],
-    })
+        "history": avix_hist.to_dict(orient="records") if not avix_hist.empty else [],
+        "signal_history": signal_hist.to_dict(orient="records") if not signal_hist.empty else [],
+    }
 
 
-def _refresh_avix_payload(skip_avix: bool = False, timeout_seconds: int = 120) -> dict:
+def _refresh_avix_payload(skip_avix: bool = False) -> dict:
     if skip_avix:
         latest, avix_hist = _load_cached_avix()
-        return {
-            "latest": latest or {},
-            "history": avix_hist.tail(260).to_dict(orient="records") if not avix_hist.empty else [],
-            "note": "本次跳过 AVIX 实时刷新，使用历史缓存",
-        }
+        payload = _avix_payload_from_history(latest, avix_hist)
+        payload["note"] = "本次跳过 AVIX 实时刷新，使用历史缓存"
+        return payload
 
-    ctx = mp.get_context("fork")
-    queue: mp.Queue = ctx.Queue()
-    proc = ctx.Process(target=_avix_worker, args=(queue,))
-    proc.start()
-    proc.join(timeout_seconds)
-    if proc.is_alive():
-        proc.terminate()
-        proc.join(10)
-        latest, avix_hist = _load_cached_avix()
-        return {
-            "latest": latest or {},
-            "history": avix_hist.tail(260).to_dict(orient="records") if not avix_hist.empty else [],
-            "note": f"AVIX 实时刷新超过 {timeout_seconds} 秒，使用历史缓存",
-        }
-    if proc.exitcode != 0:
-        latest, avix_hist = _load_cached_avix()
-        return {
-            "latest": latest or {},
-            "history": avix_hist.tail(260).to_dict(orient="records") if not avix_hist.empty else [],
-            "note": f"AVIX 实时刷新失败，子进程退出码 {proc.exitcode}，使用历史缓存",
-        }
-    try:
-        return queue.get_nowait()
-    except Exception as exc:
-        latest, avix_hist = _load_cached_avix()
-        return {
-            "latest": latest or {},
-            "history": avix_hist.tail(260).to_dict(orient="records") if not avix_hist.empty else [],
-            "note": f"AVIX 实时刷新未返回结果：{exc}；使用历史缓存",
-        }
+    latest = calculate_and_store_avix()
+    avix_hist = load_avix_history()
+    return _avix_payload_from_history(latest, avix_hist)
 
 
 def _build_backtest_payload(lookback_days: int = 360) -> dict:
@@ -384,54 +356,32 @@ def _build_backtest_payload(lookback_days: int = 360) -> dict:
         }
 
 
-def _backtest_worker(queue: mp.Queue, lookback_days: int) -> None:
-    queue.put(_build_backtest_payload(lookback_days))
-
-
-def _build_backtest_payload_limited(lookback_days: int = 360, timeout_seconds: int = 210) -> dict:
-    ctx = mp.get_context("fork")
-    queue: mp.Queue = ctx.Queue()
-    proc = ctx.Process(target=_backtest_worker, args=(queue, lookback_days))
-    proc.start()
-    proc.join(timeout_seconds)
-    if proc.is_alive():
-        proc.terminate()
-        proc.join(10)
-        previous = _read_json(BACKTEST_DIR / "strategy_summary.json")
-        if previous:
-            previous = dict(previous)
-            previous["status"] = "stale_after_timeout"
-            previous["error"] = f"本次回测生成超过 {timeout_seconds} 秒，继续使用上一份缓存"
-            previous["generated_at"] = previous.get("generated_at", "")
-            return previous
-        return {
-            "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
-            "lookback_days": lookback_days,
-            "status": "timeout",
-            "error": f"回测生成超过 {timeout_seconds} 秒",
-        }
-    if proc.exitcode != 0:
-        previous = _read_json(BACKTEST_DIR / "strategy_summary.json")
-        if previous:
-            previous = dict(previous)
-            previous["status"] = "stale_after_error"
-            previous["error"] = f"本次回测生成失败，子进程退出码 {proc.exitcode}，继续使用上一份缓存"
-            return previous
-        return {
-            "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
-            "lookback_days": lookback_days,
-            "status": "error",
-            "error": f"回测子进程退出码 {proc.exitcode}",
-        }
-    try:
-        return queue.get_nowait()
-    except Exception:
-        return {
-            "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
-            "lookback_days": lookback_days,
-            "status": "error",
-            "error": "回测子进程未返回结果",
-        }
+def _latest_strategy_payload(signal_history: list[dict], strategy: str) -> dict:
+    if not signal_history:
+        return {"latest": {}, "recent_buy": [], "recent_sell": []}
+    df = pd.DataFrame(signal_history).copy()
+    if df.empty:
+        return {"latest": {}, "recent_buy": [], "recent_sell": []}
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+        df = df.sort_values("trade_date")
+    buy_col = f"{strategy}_buy"
+    sell_col = f"{strategy}_sell"
+    sell_reason_col = f"{strategy}_sell_reason"
+    cols = [
+        "trade_date", "execution_trade_date", "execution_sse_open", "avix",
+        "sse_open", "sse_close", "sse_ret1", "sse_ret10", "sse_ma5",
+        f"{strategy}_signal", buy_col, sell_col, sell_reason_col,
+    ]
+    cols = [c for c in cols if c in df.columns]
+    latest = df.iloc[-1][cols].to_dict() if cols else df.iloc[-1].to_dict()
+    recent_buy = df[df[buy_col].astype(bool)].tail(20)[cols].to_dict(orient="records") if buy_col in df.columns else []
+    recent_sell = df[df[sell_col].astype(bool)].tail(20)[cols].to_dict(orient="records") if sell_col in df.columns else []
+    return {
+        "latest": latest,
+        "recent_buy": recent_buy,
+        "recent_sell": recent_sell,
+    }
 
 
 def _snapshot_payload(df: pd.DataFrame, target_date: pd.Timestamp, skip_avix: bool = False) -> dict:
@@ -447,14 +397,13 @@ def _snapshot_payload(df: pd.DataFrame, target_date: pd.Timestamp, skip_avix: bo
     opp_pool = df[df["信号"].str.contains("满仓|底仓|顺势", na=False)]
     today_buy, today_sell = _build_recommendations(df, DATA_DIR / "sw_board_history.csv")
 
-    try:
-        avix_payload = _refresh_avix_payload(skip_avix=skip_avix)
-        AVIX_DIR.mkdir(parents=True, exist_ok=True)
-        avix_history = avix_payload.get("history", []) or []
-        if avix_history:
-            pd.DataFrame(avix_history).to_csv(AVIX_DIR / "avix_history.csv", index=False)
-    except Exception as exc:
-        avix_payload = {"error": str(exc)}
+    avix_payload = _refresh_avix_payload(skip_avix=skip_avix)
+    AVIX_DIR.mkdir(parents=True, exist_ok=True)
+    avix_history = avix_payload.get("history", []) or []
+    if avix_history:
+        pd.DataFrame(avix_history).to_csv(AVIX_DIR / "avix_history.csv", index=False)
+
+    signal_history = avix_payload.get("signal_history", []) or []
 
     sectors = df.to_dict(orient="records")
     return {
@@ -477,8 +426,9 @@ def _snapshot_payload(df: pd.DataFrame, target_date: pd.Timestamp, skip_avix: bo
                 "max_risk": MAX_RISK,
             },
         },
-        "s3_signal": {},
-        "s4_signal": {},
+        "s3_signal": _latest_strategy_payload(signal_history, "s3"),
+        "s4_signal": _latest_strategy_payload(signal_history, "s4"),
+        "s3_s4_signal": _latest_strategy_payload(signal_history, "s3_s4"),
         "avix": avix_payload,
         "sectors": sectors,
     }
@@ -539,7 +489,7 @@ def main() -> int:
             "error": "本次跳过回测刷新，且不存在历史回测缓存",
         }
     else:
-        backtest_payload = _build_backtest_payload_limited()
+        backtest_payload = _build_backtest_payload()
     _write_json(HISTORY_DIR / f"snapshot_{target_str}.json", payload)
     _write_json(LATEST_FILE, payload)
     _write_json(BACKTEST_DIR / "strategy_summary.json", backtest_payload)
