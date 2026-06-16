@@ -1199,6 +1199,15 @@ def build_avix_s3_s4_signal_history(avix_hist: pd.DataFrame | None = None) -> pd
         return pd.DataFrame()
 
     out = add_trade_signals(add_s3_s4_signals(merged))
+    bad_s3 = out[out["s3_buy"].astype(bool) & (out["avix"] < 25)]
+    bad_s4 = out[out["s4_buy"].astype(bool) & (out["avix"] < 22)]
+    bad_combo = out[out["s3_s4_buy"].astype(bool) & (out["avix"] < 22)]
+    if not bad_s3.empty:
+        raise ValueError("S3 买入信号存在 AVIX<25 的非法标注")
+    if not bad_s4.empty:
+        raise ValueError("S4 买入信号存在 AVIX<22 的非法标注")
+    if not bad_combo.empty:
+        raise ValueError("S3+S4 买入信号存在 AVIX<22 的非法标注")
     out["execution_trade_date"] = out["trade_date"].shift(-1)
     out["execution_sse_open"] = out["sse_open"].shift(-1)
     out.to_csv(AVIX_SSE_SIGNAL_FILE, index=False, encoding="utf-8-sig")

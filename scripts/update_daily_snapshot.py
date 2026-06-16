@@ -37,6 +37,7 @@ PROCESSED_CACHE_FILE = DATA_DIR / "processed_sw_cache.csv"
 HISTORY_DIR = DATA_DIR / "history"
 AVIX_DIR = DATA_DIR / "avix"
 BACKTEST_DIR = DATA_DIR / "backtest"
+RECOMMENDATION_STATE_FILE = DATA_DIR / "recommendation_state.json"
 
 SAMPLE_SECTORS = ["银行", "电子", "煤炭", "基础化工", "机械设备", "食品饮料", "医药生物", "电力设备"]
 
@@ -157,7 +158,94 @@ def _load_valid_processed_cache(target_date: pd.Timestamp) -> pd.DataFrame:
     return df if not _validate_dataframe(df, target_date) else pd.DataFrame()
 
 
-def _build_recommendations(df: pd.DataFrame, history_file: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _state_rows_to_frame(rows: list[dict]) -> pd.DataFrame:
+    out = pd.DataFrame(rows or [])
+    for col in ["涨跌幅", "综合博弈得分", "逃顶风险分"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    return out
+
+
+def _recover_previous_recommendation(target_date: pd.Timestamp, history_file: Path) -> pd.DataFrame:
+    prior_rows: list[dict] = []
+    for path in sorted(HISTORY_DIR.glob("snapshot_*.json")):
+        try:
+            payload = _read_json(path)
+            trade_date = pd.Timestamp(payload.get("trade_date")).normalize()
+        except Exception:
+            continue
+        if trade_date >= target_date:
+            continue
+        buys = ((payload.get("clarity_signal") or {}).get("buy") or [])
+        if buys:
+            prior_rows = buys
+
+    if prior_rows:
+        return _state_rows_to_frame(prior_rows)
+
+    if not history_file.exists():
+        return pd.DataFrame()
+    try:
+        hist = pd.read_csv(history_file)
+    except Exception:
+        return pd.DataFrame()
+    required = {"snapshot_time", "板块名称", "涨跌幅", "综合博弈得分", "逃顶风险分"}
+    if hist.empty or not required.issubset(hist.columns):
+        return pd.DataFrame()
+    hist = hist.copy()
+    if "数据日期" in hist.columns:
+        hist["_trade_date"] = pd.to_datetime(hist["数据日期"].astype(str).str[:10], errors="coerce")
+        hist = hist[hist["_trade_date"].dt.normalize() < target_date]
+    hist["slot"] = hist["snapshot_time"].astype(str).str[:16]
+    recovered = pd.DataFrame()
+    for slot in sorted(hist["slot"].dropna().unique().tolist()):
+        prev = hist[hist["slot"] == slot].copy()
+        prev_breadth = float((pd.to_numeric(prev["涨跌幅"], errors="coerce") > 0).mean())
+        if prev_breadth < BUY_BREADTH_FLOOR:
+            continue
+        cand = (
+            prev[
+                (pd.to_numeric(prev["综合博弈得分"], errors="coerce") >= MIN_SCORE)
+                & (pd.to_numeric(prev["逃顶风险分"], errors="coerce") < MAX_RISK)
+            ]
+            .sort_values("综合博弈得分", ascending=False)
+            .head(1)
+            .copy()
+        )
+        if not cand.empty:
+            recovered = cand
+    return recovered
+
+
+def _load_recommendation_holding(target_date: pd.Timestamp, history_file: Path) -> pd.DataFrame:
+    state = _read_json(RECOMMENDATION_STATE_FILE)
+    if isinstance(state, dict) and state.get("last_sell_trade_date") == target_date.strftime("%Y-%m-%d"):
+        return pd.DataFrame()
+    holdings = state.get("holdings", []) if isinstance(state, dict) else []
+    if holdings:
+        return _state_rows_to_frame(holdings)
+    return _recover_previous_recommendation(target_date, history_file)
+
+
+def _write_recommendation_state(
+    target_date: pd.Timestamp,
+    holdings: pd.DataFrame,
+    breadth_ratio: float,
+    last_sell: pd.DataFrame | None = None,
+) -> None:
+    rows = holdings.to_dict(orient="records") if not holdings.empty else []
+    sell_rows = last_sell.to_dict(orient="records") if last_sell is not None and not last_sell.empty else []
+    _write_json(RECOMMENDATION_STATE_FILE, {
+        "as_of_trade_date": target_date.strftime("%Y-%m-%d"),
+        "updated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
+        "market_breadth": breadth_ratio,
+        "holdings": rows,
+        "last_sell_trade_date": target_date.strftime("%Y-%m-%d") if sell_rows else "",
+        "last_sell": sell_rows,
+    })
+
+
+def _build_recommendations(df: pd.DataFrame, history_file: Path, target_date: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
     breadth_ratio = float((df["涨跌幅"] > 0).mean())
     today_buy = pd.DataFrame()
     if breadth_ratio >= BUY_BREADTH_FLOOR:
@@ -168,32 +256,30 @@ def _build_recommendations(df: pd.DataFrame, history_file: Path) -> tuple[pd.Dat
             .copy()
         )
 
-    previous_hold_names: set[str] = set()
-    if history_file.exists():
-        try:
-            hist = pd.read_csv(history_file)
-            required = {"snapshot_time", "板块名称", "涨跌幅", "综合博弈得分", "逃顶风险分"}
-            if not hist.empty and required.issubset(hist.columns):
-                hist["slot"] = hist["snapshot_time"].astype(str).str[:16]
-                prev_slot = sorted(hist["slot"].dropna().unique().tolist())[-1]
-                prev = hist[hist["slot"] == prev_slot].copy()
-                prev_breadth = float((pd.to_numeric(prev["涨跌幅"], errors="coerce") > 0).mean())
-                if prev_breadth >= BUY_BREADTH_FLOOR:
-                    prev = prev[
-                        (pd.to_numeric(prev["综合博弈得分"], errors="coerce") >= MIN_SCORE)
-                        & (pd.to_numeric(prev["逃顶风险分"], errors="coerce") < MAX_RISK)
-                    ].sort_values("综合博弈得分", ascending=False).head(1)
-                    previous_hold_names = set(prev["板块名称"].astype(str))
-        except Exception:
-            previous_hold_names = set()
-
+    previous_hold = _load_recommendation_holding(target_date, history_file)
     sell_rows = []
     if breadth_ratio < SELL_BREADTH_FLOOR:
-        for name in sorted(previous_hold_names):
-            match = df[df["板块名称"].astype(str) == name]
-            item = match.iloc[0].to_dict() if not match.empty else {"板块名称": name}
-            item["卖出原因"] = f"市场广度 < {SELL_BREADTH_FLOOR:.0%}"
-            sell_rows.append(item)
+        if previous_hold.empty:
+            state = _read_json(RECOMMENDATION_STATE_FILE)
+            if state.get("last_sell_trade_date") == target_date.strftime("%Y-%m-%d"):
+                sell_rows = state.get("last_sell", []) or []
+        else:
+            for _, hold in previous_hold.iterrows():
+                name = str(hold.get("板块名称", ""))
+                if not name:
+                    continue
+                match = df[df["板块名称"].astype(str) == name]
+                item = match.iloc[0].to_dict() if not match.empty else {"板块名称": name}
+                item["卖出原因"] = f"市场广度 < {SELL_BREADTH_FLOOR:.0%}"
+                if "对应ETF" not in item or not item.get("对应ETF"):
+                    item["对应ETF"] = hold.get("对应ETF", "")
+                sell_rows.append(item)
+        today_sell = pd.DataFrame(sell_rows)
+        _write_recommendation_state(target_date, pd.DataFrame(), breadth_ratio, today_sell)
+    elif not today_buy.empty:
+        _write_recommendation_state(target_date, today_buy, breadth_ratio)
+    else:
+        _write_recommendation_state(target_date, previous_hold, breadth_ratio)
     return today_buy, pd.DataFrame(sell_rows)
 
 
@@ -395,7 +481,7 @@ def _snapshot_payload(df: pd.DataFrame, target_date: pd.Timestamp, skip_avix: bo
     breadth_pct = float((df["涨跌幅"] > 0).mean() * 100)
     risk_pool = df[df["信号"].str.contains("强制清仓|崩盘|鱼尾|诱多|强弩|战术减仓", na=False)]
     opp_pool = df[df["信号"].str.contains("满仓|底仓|顺势", na=False)]
-    today_buy, today_sell = _build_recommendations(df, DATA_DIR / "sw_board_history.csv")
+    today_buy, today_sell = _build_recommendations(df, DATA_DIR / "sw_board_history.csv", target_date)
 
     avix_payload = _refresh_avix_payload(skip_avix=skip_avix)
     AVIX_DIR.mkdir(parents=True, exist_ok=True)

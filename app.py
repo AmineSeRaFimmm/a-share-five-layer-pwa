@@ -379,6 +379,12 @@ if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
         ("3年", 756),
         ("5年", 1260),
     ]
+    signal_filter = st.pills(
+        "信号显示",
+        ["全部", "S3", "S4", "S3+S4", "隐藏信号"],
+        default="全部",
+        label_visibility="collapsed",
+    )
     window_tabs = st.tabs([label for label, _ in windows])
     for tab, (label, size) in zip(window_tabs, windows):
         with tab:
@@ -394,46 +400,26 @@ if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
                     hovertemplate="%{x}<br>AVIX %{y:.2f}<extra></extra>",
                 )
             )
-            fig.add_trace(_signal_trace(plot_df, "s3", "buy", "S3 买入", "#d92d20", "circle"))
-            fig.add_trace(_signal_trace(plot_df, "s3", "sell", "S3 卖出", "#d92d20", "triangle-down"))
-            fig.add_trace(_signal_trace(plot_df, "s4", "buy", "S4 买入", "#f79009", "circle"))
-            fig.add_trace(_signal_trace(plot_df, "s4", "sell", "S4 卖出", "#f79009", "triangle-down"))
-            fig.add_trace(_signal_trace(plot_df, "s3_s4", "buy", "S3+S4 买入", "#7a5af8", "circle"))
-            fig.add_trace(_signal_trace(plot_df, "s3_s4", "sell", "S3+S4 卖出", "#7a5af8", "triangle-down"))
+            if signal_filter in ["全部", "S3"]:
+                fig.add_trace(_signal_trace(plot_df, "s3", "buy", "S3 买入", "#d92d20", "circle"))
+                fig.add_trace(_signal_trace(plot_df, "s3", "sell", "S3 卖出", "#d92d20", "triangle-down"))
+            if signal_filter in ["全部", "S4"]:
+                fig.add_trace(_signal_trace(plot_df, "s4", "buy", "S4 买入", "#f79009", "circle"))
+                fig.add_trace(_signal_trace(plot_df, "s4", "sell", "S4 卖出", "#f79009", "triangle-down"))
+            if signal_filter in ["全部", "S3+S4"]:
+                fig.add_trace(_signal_trace(plot_df, "s3_s4", "buy", "S3+S4 买入", "#7a5af8", "circle"))
+                fig.add_trace(_signal_trace(plot_df, "s3_s4", "sell", "S3+S4 卖出", "#7a5af8", "triangle-down"))
             max_avix = float(plot_df["avix"].max()) if not plot_df.empty else 80.0
-            y_upper = max(80.0, ((max_avix // 10) + 2) * 10)
-            trace_count = len(fig.data)
-            visible_all = [True] * trace_count
-            visible_hide = [True] + [False] * (trace_count - 1)
-            visible_s3 = [True, True, True, False, False, False, False]
-            visible_s4 = [True, False, False, True, True, False, False]
-            visible_combo = [True, False, False, False, False, True, True]
+            y_upper = 35.0 if max_avix <= 35 else ((max_avix // 5) + 2) * 5
             fig.update_layout(
                 height=430,
                 template="plotly_white",
-                margin=dict(l=0, r=0, t=48, b=0),
+                margin=dict(l=0, r=0, t=20, b=0),
                 hovermode="x unified",
                 xaxis=dict(type="category", nticks=8, gridcolor="#eef2f7"),
-                yaxis=dict(title="波动率点数", range=[0, y_upper], dtick=10, gridcolor="#eef2f7", zeroline=False),
+                yaxis=dict(title="波动率点数", range=[0, y_upper], dtick=5 if y_upper <= 35 else 10, gridcolor="#eef2f7", zeroline=False),
                 showlegend=True,
                 legend=dict(orientation="h", x=0.01, y=1.02, xanchor="left", yanchor="bottom", font=dict(size=11)),
-                updatemenus=[dict(
-                    type="buttons",
-                    direction="right",
-                    x=0.01,
-                    y=1.16,
-                    xanchor="left",
-                    yanchor="top",
-                    showactive=True,
-                    pad=dict(t=0, r=4),
-                    buttons=[
-                        dict(label="全部", method="update", args=[{"visible": visible_all}]),
-                        dict(label="S3", method="update", args=[{"visible": visible_s3}]),
-                        dict(label="S4", method="update", args=[{"visible": visible_s4}]),
-                        dict(label="S3+S4", method="update", args=[{"visible": visible_combo}]),
-                        dict(label="隐藏信号", method="update", args=[{"visible": visible_hide}]),
-                    ],
-                )],
             )
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
             st.caption(f"{label} · {len(plot_df)} 个交易样本")
