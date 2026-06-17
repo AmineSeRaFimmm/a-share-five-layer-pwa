@@ -1,8 +1,17 @@
 {
-  "target_date": "2026-06-17",
-  "target_trade_date": "2026-06-17",
-  "last_attempt_at": "2026-06-17 23:34:14",
-  "status": "skipped",
-  "reason": "该交易日已经成功更新",
-  "latest_source_dates": {}
+  "target_date": "2026-06-18",
+  "target_trade_date": "2026-06-18",
+  "last_attempt_at": "2026-06-18 02:37:36",
+  "status": "waiting_partial",
+  "reason": "申万样本行业数据尚未全部更新",
+  "latest_source_dates": {
+    "银行": "",
+    "电子": "",
+    "煤炭": "",
+    "基础化工": "",
+    "机械设备": "",
+    "食品饮料": "",
+    "医药生物": "",
+    "电力设备": ""
+  }
 }
