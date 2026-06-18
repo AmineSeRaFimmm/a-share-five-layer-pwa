@@ -1,0 +1,148 @@
+{
+  "generated_at": "2026-06-18 20:59:17",
+  "status": "ready",
+  "update_mode": "shadow_compare",
+  "promoted": false,
+  "script": "scripts/generate_fullrisk_grid_300.py",
+  "method": "daily_recomputed_full_3d_risk_no_simple_fallback",
+  "lookback_days": 300,
+  "warmup_days": 90,
+  "min_sectors_per_day": 20,
+  "first_trade_date": "2025-03-24",
+  "last_trade_date": "2026-06-17",
+  "observed_trade_days": 300,
+  "observed_sectors": 31,
+  "grid_size": 384,
+  "primary_params": {
+    "buy_breadth": 0.7,
+    "sell_breadth": 0.35,
+    "min_score": 54,
+    "max_risk": 45
+  },
+  "primary_summary": {
+    "买入广度": 0.7,
+    "卖出广度": 0.35,
+    "综合分阈值": 54.0,
+    "风险分阈值": 45.0,
+    "累计收益": 0.6958982601945545,
+    "年化收益": 0.5584606010816726,
+    "最大回撤": -0.06715500949434006,
+    "交易次数": 88.0,
+    "交易胜率": 0.625,
+    "日胜率": 0.5576923076923077,
+    "相对胜率": 0.4866666666666667,
+    "profit_factor": 2.67748241253248,
+    "最长连续亏损": 4.0,
+    "持仓占比": 0.52
+  },
+  "compare_status": "match_within_tolerance",
+  "outputs": {
+    "candidate_results": "data/backtest/top1_fullrisk_grid_300_results_candidate.csv",
+    "candidate_top20": "data/backtest/top1_fullrisk_grid_300_top20_candidate.csv",
+    "candidate_dedup_top": "data/backtest/top1_fullrisk_grid_300_dedup_top_candidate.csv",
+    "candidate_primary_path": "data/backtest/top1_fullrisk_grid_300_primary_path_candidate.csv",
+    "compare_report": "data/backtest/top1_fullrisk_grid_300_compare_report.json",
+    "official_results": "data/backtest/top1_fullrisk_grid_300_results.csv"
+  },
+  "strict_checks": [
+    "完整风险分由 _build_3d_scores 逐日使用当日及以前历史生成",
+    "不允许退回逃顶风险简分",
+    "next_ret 仅用于下一交易日验证，不进入当日评分",
+    "主策略参数固定为 70/35/54/45",
+    "当前版本暂不加入 ETF 成本",
+    "默认影子对账模式不覆盖正式表，只有 --promote 才覆盖"
+  ],
+  "comparison": {
+    "status": "match_within_tolerance",
+    "message": "candidate 与正式基准表差异在容忍范围内。",
+    "official_primary": {
+      "买入广度": 0.7,
+      "卖出广度": 0.35,
+      "综合分阈值": 54.0,
+      "风险分阈值": 45.0,
+      "累计收益": 0.7142569457314825,
+      "年化收益": 0.5726199144793551,
+      "最大回撤": -0.057056639658506,
+      "交易次数": 88.0,
+      "交易胜率": 0.6363636363636364,
+      "日胜率": 0.5641025641025641,
+      "相对胜率": 0.532051282051282,
+      "profit_factor": 2.7334470360950927,
+      "最长连续亏损": 4.0,
+      "持仓占比": 0.52
+    },
+    "candidate_primary": {
+      "买入广度": 0.7,
+      "卖出广度": 0.35,
+      "综合分阈值": 54.0,
+      "风险分阈值": 45.0,
+      "累计收益": 0.6958982601945545,
+      "年化收益": 0.5584606010816726,
+      "最大回撤": -0.06715500949434006,
+      "交易次数": 88.0,
+      "交易胜率": 0.625,
+      "日胜率": 0.5576923076923077,
+      "相对胜率": 0.4866666666666667,
+      "profit_factor": 2.67748241253248,
+      "最长连续亏损": 4.0,
+      "持仓占比": 0.52
+    },
+    "metric_diffs": {
+      "累计收益": {
+        "official": 0.7142569457314825,
+        "candidate": 0.6958982601945545,
+        "diff": -0.018358685536927988
+      },
+      "年化收益": {
+        "official": 0.5726199144793551,
+        "candidate": 0.5584606010816726,
+        "diff": -0.014159313397682505
+      },
+      "最大回撤": {
+        "official": -0.057056639658506,
+        "candidate": -0.06715500949434006,
+        "diff": -0.010098369835834058
+      },
+      "交易次数": {
+        "official": 88.0,
+        "candidate": 88.0,
+        "diff": 0.0
+      },
+      "交易胜率": {
+        "official": 0.6363636363636364,
+        "candidate": 0.625,
+        "diff": -0.011363636363636354
+      },
+      "日胜率": {
+        "official": 0.5641025641025641,
+        "candidate": 0.5576923076923077,
+        "diff": -0.0064102564102563875
+      },
+      "相对胜率": {
+        "official": 0.532051282051282,
+        "candidate": 0.4866666666666667,
+        "diff": -0.04538461538461536
+      },
+      "profit_factor": {
+        "official": 2.7334470360950927,
+        "candidate": 2.67748241253248,
+        "diff": -0.05596462356261256
+      },
+      "最长连续亏损": {
+        "official": 4.0,
+        "candidate": 4.0,
+        "diff": 0.0
+      },
+      "持仓占比": {
+        "official": 0.52,
+        "candidate": 0.52,
+        "diff": 0.0
+      }
+    },
+    "tolerance": {
+      "max_return_diff": 0.02,
+      "max_drawdown_diff": 0.02,
+      "max_winrate_diff": 0.03
+    }
+  }
+}
