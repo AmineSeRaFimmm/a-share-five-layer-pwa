@@ -157,8 +157,9 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
         selected = pd.DataFrame()
 
         if breadth < SELL_BREADTH_FLOOR:
+            had_position = bool(current_position)
             current_position = ""
-            action = "sell" if current_position else "flat"
+            action = "sell" if had_position else "flat"
         else:
             if breadth >= BUY_BREADTH_FLOOR:
                 candidate = (
