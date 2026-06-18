@@ -8,6 +8,12 @@ from utils import SW_CODE_MAPPING, rank_score, winsorize
 
 
 PRODUCTION_SCORE_VERSION = "production_score_v2_regime_micro_neutral"
+PRIMARY_STRATEGY_KEY = "top1_breadth"
+PRIMARY_STRATEGY_LABEL = "Top1 + 广度过滤"
+BUY_BREADTH_FLOOR = 0.60
+SELL_BREADTH_FLOOR = 0.45
+MIN_SCORE = 58.0
+MAX_RISK = 55.0
 RAW_COLS = ["trend_raw", "fund_raw", "abnormal_raw", "trap_raw", "efficiency_raw", "mid_confirm_raw"]
 
 
@@ -135,3 +141,137 @@ def build_walk_forward_scores(lookback_days: int = 520) -> pd.DataFrame:
     if scored.empty:
         return pd.DataFrame()
     return scored
+
+
+def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) -> pd.DataFrame:
+    """今日推荐同口径：Top1 + 买入广度60% + 卖出广度45% + 综合/风险阈值。"""
+    if scored.empty:
+        return pd.DataFrame()
+    rows: list[dict] = []
+    current_position = ""
+    for dt, day in scored.groupby("date", sort=True):
+        day = day.copy()
+        breadth = float((day["涨跌幅"] > 0).mean())
+        bench_ret = float(day["next_ret"].mean())
+        action = "flat"
+        selected = pd.DataFrame()
+
+        if breadth < SELL_BREADTH_FLOOR:
+            current_position = ""
+            action = "sell" if current_position else "flat"
+        else:
+            if breadth >= BUY_BREADTH_FLOOR:
+                candidate = (
+                    day[(day["综合博弈得分"] >= MIN_SCORE) & (day["逃顶风险简分"] < MAX_RISK)]
+                    .sort_values("综合博弈得分", ascending=False)
+                    .head(1)
+                )
+                if not candidate.empty:
+                    new_position = str(candidate.iloc[0]["板块名称"])
+                    action = "buy" if current_position != new_position else "hold"
+                    current_position = new_position
+            if current_position:
+                selected = day[day["板块名称"].astype(str) == current_position].head(1)
+                if action == "flat":
+                    action = "hold"
+
+        if selected.empty:
+            strategy_ret = 0.0
+            names = "空仓"
+            top_score = 0.0
+            risk = 0.0
+        else:
+            strategy_ret = float(selected["next_ret"].iloc[0])
+            names = str(selected["板块名称"].iloc[0])
+            top_score = float(selected["综合博弈得分"].iloc[0])
+            risk = float(selected["逃顶风险简分"].iloc[0])
+
+        rows.append({
+            "date": dt,
+            "策略": PRIMARY_STRATEGY_LABEL,
+            "动作": action,
+            "持有板块": names,
+            "综合博弈得分": top_score,
+            "风险简分": risk,
+            "市场广度": breadth * 100,
+            "strategy_ret": strategy_ret,
+            "benchmark_ret": bench_ret,
+            "direction_hit": strategy_ret > 0,
+            "relative_hit": strategy_ret > bench_ret,
+        })
+
+    bt = pd.DataFrame(rows).sort_values("date").tail(lookback_days).reset_index(drop=True)
+    if bt.empty:
+        return bt
+    bt["strategy_nav"] = (1 + bt["strategy_ret"]).cumprod()
+    bt["benchmark_nav"] = (1 + bt["benchmark_ret"]).cumprod()
+    return bt
+
+
+def build_reference_backtest(scored: pd.DataFrame, lookback_days: int, strategy: str) -> pd.DataFrame:
+    rows = []
+    for dt, day in scored.groupby("date", sort=True):
+        day = day.copy()
+        breadth = float((day["涨跌幅"] > 0).mean())
+        bench_ret = float(day["next_ret"].mean())
+        if strategy == "top1":
+            picks = day.sort_values("综合博弈得分", ascending=False).head(1)
+        elif strategy == "top3_balanced":
+            picks = day[day["逃顶风险简分"] < 72].sort_values("综合博弈得分", ascending=False).head(3)
+        elif strategy == "top3_regime":
+            picks = pd.DataFrame() if breadth < 0.38 else day[day["逃顶风险简分"] < 72].sort_values("综合博弈得分", ascending=False).head(3)
+        else:
+            raise ValueError(f"unknown strategy: {strategy}")
+        if picks.empty:
+            strategy_ret = 0.0
+            names = "空仓"
+            top_score = 0.0
+            risk = 0.0
+        else:
+            strategy_ret = float(picks["next_ret"].mean())
+            names = " / ".join(picks["板块名称"].astype(str).tolist())
+            top_score = float(picks["综合博弈得分"].mean())
+            risk = float(picks["逃顶风险简分"].mean())
+        rows.append({
+            "date": dt,
+            "持有板块": names,
+            "综合博弈得分": top_score,
+            "风险简分": risk,
+            "市场广度": breadth * 100,
+            "strategy_ret": strategy_ret,
+            "benchmark_ret": bench_ret,
+            "direction_hit": strategy_ret > 0,
+            "relative_hit": strategy_ret > bench_ret,
+        })
+    bt = pd.DataFrame(rows).sort_values("date").tail(lookback_days).reset_index(drop=True)
+    if bt.empty:
+        return bt
+    bt["strategy_nav"] = (1 + bt["strategy_ret"]).cumprod()
+    bt["benchmark_nav"] = (1 + bt["benchmark_ret"]).cumprod()
+    return bt
+
+
+def summarize_backtest(bt: pd.DataFrame) -> dict[str, float]:
+    if bt.empty:
+        return {}
+    bt = bt.copy()
+    if "strategy_nav" not in bt.columns:
+        bt["strategy_nav"] = (1 + bt["strategy_ret"]).cumprod()
+    if "benchmark_nav" not in bt.columns:
+        bt["benchmark_nav"] = (1 + bt["benchmark_ret"]).cumprod()
+
+    def _max_drawdown(nav: pd.Series) -> float:
+        dd = nav / nav.cummax() - 1.0
+        return float(dd.min())
+
+    periods = max(len(bt), 1)
+    return {
+        "交易日数": float(periods),
+        "胜率": float(bt["direction_hit"].mean()),
+        "相对胜率": float(bt["relative_hit"].mean()),
+        "累计收益": float(bt["strategy_nav"].iloc[-1] - 1.0),
+        "基准收益": float(bt["benchmark_nav"].iloc[-1] - 1.0),
+        "年化收益": float(bt["strategy_nav"].iloc[-1] ** (252 / periods) - 1.0),
+        "最大回撤": _max_drawdown(bt["strategy_nav"]),
+        "夏普比率": float((bt["strategy_ret"].mean() / (bt["strategy_ret"].std(ddof=0) + 1e-9)) * np.sqrt(252)),
+    }
