@@ -160,7 +160,9 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
         display_position = ""
         selected = pd.DataFrame()
         trade_id = 0
-        cost_rate = 0.0
+        exit_trade_id = 0
+        entry_cost = 0.0
+        exit_cost = 0.0
 
         if breadth < SELL_BREADTH_FLOOR:
             sold_position = current_position
@@ -169,8 +171,8 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
             current_trade_id = 0
             action = "sell" if sold_position else "flat"
             display_position = sold_position
-            trade_id = sold_trade_id if sold_position else 0
-            cost_rate = TRANSACTION_COST_RATE if sold_position else 0.0
+            exit_trade_id = sold_trade_id if sold_position else 0
+            exit_cost = TRANSACTION_COST_RATE if sold_position else 0.0
         else:
             if breadth >= BUY_BREADTH_FLOOR:
                 candidate = (
@@ -181,10 +183,12 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
                 if not candidate.empty:
                     new_position = str(candidate.iloc[0]["板块名称"])
                     if current_position != new_position:
-                        is_rotation = bool(current_position)
+                        if current_position:
+                            exit_trade_id = current_trade_id
+                            exit_cost = TRANSACTION_COST_RATE
                         next_trade_id += 1
                         current_trade_id = next_trade_id
-                        cost_rate = TRANSACTION_COST_RATE * (2.0 if is_rotation else 1.0)
+                        entry_cost = TRANSACTION_COST_RATE
                         action = "buy"
                     else:
                         action = "hold"
@@ -208,7 +212,8 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
             risk = float(selected["逃顶风险简分"].iloc[0])
             is_holding = True
 
-        net_strategy_ret = (1.0 + strategy_ret) * (1.0 - cost_rate) - 1.0
+        trade_component_ret = (1.0 + strategy_ret) * (1.0 - entry_cost) - 1.0 if trade_id else 0.0
+        net_strategy_ret = (1.0 + strategy_ret) * (1.0 - entry_cost) * (1.0 - exit_cost) - 1.0
         rows.append({
             "date": dt,
             "策略": PRIMARY_STRATEGY_LABEL,
@@ -218,8 +223,12 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
             "风险简分": risk,
             "市场广度": breadth * 100,
             "trade_id": trade_id,
+            "exit_trade_id": exit_trade_id,
             "is_holding": is_holding,
-            "transaction_cost": cost_rate,
+            "entry_cost": entry_cost,
+            "exit_cost": exit_cost,
+            "transaction_cost": entry_cost + exit_cost,
+            "trade_component_ret": trade_component_ret,
             "strategy_ret": strategy_ret,
             "net_strategy_ret": net_strategy_ret,
             "benchmark_ret": bench_ret,
@@ -279,14 +288,24 @@ def build_reference_backtest(scored: pd.DataFrame, lookback_days: int, strategy:
     return bt
 
 
-def _trade_returns(bt: pd.DataFrame, ret_col: str) -> pd.Series:
+def _trade_returns(bt: pd.DataFrame, ret_col: str = "trade_component_ret") -> pd.Series:
     if "trade_id" not in bt.columns:
         return pd.Series(dtype=float)
-    trade_df = bt[pd.to_numeric(bt["trade_id"], errors="coerce").fillna(0) > 0].copy()
-    if trade_df.empty or ret_col not in trade_df.columns:
+    components: dict[int, list[float]] = {}
+    active = bt[pd.to_numeric(bt["trade_id"], errors="coerce").fillna(0) > 0].copy()
+    if ret_col in active.columns:
+        for _, row in active.iterrows():
+            tid = int(row["trade_id"])
+            components.setdefault(tid, []).append(float(pd.to_numeric(row[ret_col], errors="coerce") or 0.0))
+    if "exit_trade_id" in bt.columns and "exit_cost" in bt.columns:
+        exits = bt[pd.to_numeric(bt["exit_trade_id"], errors="coerce").fillna(0) > 0].copy()
+        for _, row in exits.iterrows():
+            tid = int(row["exit_trade_id"])
+            exit_cost = float(pd.to_numeric(row["exit_cost"], errors="coerce") or 0.0)
+            components.setdefault(tid, []).append(-exit_cost)
+    if not components:
         return pd.Series(dtype=float)
-    grouped = trade_df.groupby("trade_id")[ret_col].apply(lambda x: float((1.0 + pd.to_numeric(x, errors="coerce").fillna(0.0)).prod() - 1.0))
-    return grouped.dropna()
+    return pd.Series({tid: float(np.prod([1.0 + r for r in returns]) - 1.0) for tid, returns in components.items()}).dropna()
 
 
 def summarize_backtest(bt: pd.DataFrame) -> dict[str, float]:
@@ -312,7 +331,7 @@ def summarize_backtest(bt: pd.DataFrame) -> dict[str, float]:
     holding_win_rate = float((bt.loc[holding_mask, "strategy_ret"] > 0).mean()) if holding_days else 0.0
     exposure = float(holding_days / periods) if periods else 0.0
 
-    trades = _trade_returns(bt, "net_strategy_ret")
+    trades = _trade_returns(bt)
     trade_count = int(len(trades))
     trade_win_rate = float((trades > 0).mean()) if trade_count else 0.0
     wins = trades[trades > 0]
