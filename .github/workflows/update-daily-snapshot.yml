@@ -2,8 +2,9 @@ name: Update Daily Snapshot
 
 on:
   schedule:
-    - cron: "17,47 10-13 * * 1-5"
-    - cron: "17 14 * * 1-5"
+    # GitHub cron uses UTC. These runs map to Beijing time 19:20, 20:20, 21:20, 22:20.
+    # The first run starts after the script's 19:00 after-close cutoff; later runs catch delayed data sources.
+    - cron: "20 11-14 * * 1-5"
   workflow_dispatch:
     inputs:
       target_date:
