@@ -24,6 +24,15 @@ FULLRISK_RECENT_SIGNALS_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_recent_sig
 FULLRISK_METADATA_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_metadata.json"
 FULLRISK_COMPARE_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_compare_report.json"
 
+NUMERIC_COLS = {
+    "买入广度", "卖出广度", "综合分阈值", "风险分阈值",
+    "累计收益", "年化收益", "最大回撤", "交易次数", "交易胜率", "日胜率", "相对胜率",
+    "profit_factor", "最长连续亏损", "持仓占比", "组合数",
+    "strategy_ret", "benchmark_ret", "hs300_ret", "strategy_nav", "benchmark_nav", "hs300_nav",
+    "综合博弈得分", "逃顶风险分", "入场共振分", "市场广度", "trade_id",
+    "行业等权收益", "沪深300收益",
+}
+
 
 def _read_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
@@ -81,9 +90,8 @@ def count_value(value: object) -> str:
 
 def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    for col in out.columns:
-        if col not in ["策略", "窗口", "date", "持有板块", "动作"]:
-            out[col] = pd.to_numeric(out[col], errors="ignore")
+    for col in NUMERIC_COLS.intersection(out.columns):
+        out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
 
 
