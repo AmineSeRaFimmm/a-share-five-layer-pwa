@@ -38,9 +38,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate 300-day full-risk grid
+      - name: Generate and promote 300-day full-risk grid
         run: |
-          python scripts/generate_fullrisk_grid_300.py
+          python scripts/generate_fullrisk_grid_300.py --promote
 
       - name: Update snapshot
         run: |
