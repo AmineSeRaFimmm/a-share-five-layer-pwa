@@ -1,8 +1,11 @@
 {
   "as_of_trade_date": "2026-06-17",
-  "updated_at": "2026-06-17 20:44:59",
+  "updated_at": "2026-06-18 09:43:50",
   "market_breadth": 0.2903225806451613,
+  "position_state": "flat",
+  "last_action": "sell",
   "holdings": [],
+  "last_buy_trade_date": "",
   "last_sell_trade_date": "2026-06-17",
   "last_sell": [
     {
