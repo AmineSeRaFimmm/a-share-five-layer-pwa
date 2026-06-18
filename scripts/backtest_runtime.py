@@ -50,7 +50,7 @@ def _max_drawdown(nav: pd.Series) -> float:
 
 
 def _trade_returns_from_rows(bt: pd.DataFrame) -> pd.Series:
-    if bt.empty or "trade_id" not in bt.columns:
+    if bt.empty or "trade_id" not in bt.columns or not bt["trade_id"].notna().any():
         return pd.Series(dtype=float)
     components: dict[int, list[float]] = {}
     for _, row in bt.iterrows():
@@ -70,7 +70,7 @@ def _trade_returns_from_rows(bt: pd.DataFrame) -> pd.Series:
     return pd.Series(returns, dtype=float)
 
 
-def _summarize_backtest(bt: pd.DataFrame) -> Dict[str, float]:
+def _summarize_backtest(bt: pd.DataFrame) -> Dict[str, object]:
     if bt.empty:
         return {}
 
@@ -90,14 +90,13 @@ def _summarize_backtest(bt: pd.DataFrame) -> Dict[str, float]:
     holding_mask = bt["is_holding"].astype(bool)
     holding_returns = bt.loc[holding_mask, "strategy_ret"]
     trade_returns = _trade_returns_from_rows(bt)
-    if trade_returns.empty and holding_returns.empty is False:
-        trade_returns = holding_returns.reset_index(drop=True)
+    has_trade_metrics = not trade_returns.empty
 
-    wins = trade_returns[trade_returns > 0]
-    losses = trade_returns[trade_returns < 0]
-    avg_profit = float(wins.mean()) if not wins.empty else 0.0
-    avg_loss = float(losses.mean()) if not losses.empty else 0.0
-    payoff = float(avg_profit / abs(avg_loss)) if avg_loss < 0 else 0.0
+    wins = trade_returns[trade_returns > 0] if has_trade_metrics else pd.Series(dtype=float)
+    losses = trade_returns[trade_returns < 0] if has_trade_metrics else pd.Series(dtype=float)
+    avg_profit = float(wins.mean()) if not wins.empty else None
+    avg_loss = float(losses.mean()) if not losses.empty else None
+    payoff = float(avg_profit / abs(avg_loss)) if avg_profit is not None and avg_loss is not None and avg_loss < 0 else None
 
     net_ret = pd.to_numeric(bt["net_strategy_ret"], errors="coerce").fillna(0.0)
     gross_ret = pd.to_numeric(bt["strategy_ret"], errors="coerce").fillna(0.0)
@@ -111,12 +110,12 @@ def _summarize_backtest(bt: pd.DataFrame) -> Dict[str, float]:
         "最大回撤": _max_drawdown(bt["strategy_nav"]),
         "夏普比率": float((gross_ret.mean() / (gross_ret.std(ddof=0) + 1e-9)) * np.sqrt(252)),
         "持仓日胜率": float((holding_returns > 0).mean()) if not holding_returns.empty else 0.0,
-        "交易胜率": float((trade_returns > 0).mean()) if not trade_returns.empty else 0.0,
+        "交易胜率": float((trade_returns > 0).mean()) if has_trade_metrics else None,
         "平均盈利": avg_profit,
         "平均亏损": avg_loss,
         "盈亏比": payoff,
         "持仓暴露率": float(holding_mask.mean()),
-        "交易次数": float(len(trade_returns)),
+        "交易次数": float(len(trade_returns)) if has_trade_metrics else None,
         "成本后收益": float(bt["net_strategy_nav"].iloc[-1] - 1.0),
         "成本后年化": float(bt["net_strategy_nav"].iloc[-1] ** (252 / periods) - 1.0),
         "成本后最大回撤": _max_drawdown(bt["net_strategy_nav"]),
@@ -307,12 +306,6 @@ def _build_strategy_backtest(scored: pd.DataFrame, lookback_days: int, strategy:
     return _build_rebalanced_backtest(scored, lookback_days, strategy)
 
 
-@pd.api.extensions.register_dataframe_accessor("_noop_backtest_accessor")
-class _NoopBacktestAccessor:
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-
 def _build_walk_forward_scores(lookback_days: int = 520) -> pd.DataFrame:
     """Build historical scores without touching the live snapshot scoring path."""
     histories: Dict[str, pd.DataFrame] = {}
@@ -345,7 +338,6 @@ def _build_walk_forward_scores(lookback_days: int = 520) -> pd.DataFrame:
         open_ = hist["open"].to_numpy(dtype=float)
         high = hist["high"].to_numpy(dtype=float)
         low = hist["low"].to_numpy(dtype=float)
-        volume = hist["volume"].to_numpy(dtype=float)
         amount = hist["amount"].to_numpy(dtype=float)
         n = len(hist)
         for i in range(60, n - 1):
