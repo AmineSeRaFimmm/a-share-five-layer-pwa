@@ -20,16 +20,23 @@ os.environ.setdefault("NO_PROXY", "*")
 os.environ.setdefault("SW_PROCESSED_CACHE_TTL_SECONDS", "0")
 
 from avix_utils import calculate_and_store_avix, load_avix_history, build_avix_s3_s4_signal_history  # noqa: E402
-from production_backtest import PRODUCTION_SCORE_VERSION, build_walk_forward_scores  # noqa: E402
+from production_backtest import (  # noqa: E402
+    BUY_BREADTH_FLOOR,
+    MAX_RISK,
+    MIN_SCORE,
+    PRIMARY_STRATEGY_KEY,
+    PRIMARY_STRATEGY_LABEL,
+    PRODUCTION_SCORE_VERSION,
+    SELL_BREADTH_FLOOR,
+    build_reference_backtest,
+    build_top1_breadth_backtest,
+    build_walk_forward_scores,
+    summarize_backtest,
+)
 from status_guard import build_status  # noqa: E402
 from ui_theme import clean_signal  # noqa: E402
 from update_runtime_guard import install as install_runtime_guard  # noqa: E402
-from utils import (  # noqa: E402
-    fetch_historical_baselines,
-    get_processed_sw_data,
-    _build_strategy_backtest,
-    _summarize_backtest,
-)
+from utils import fetch_historical_baselines, get_processed_sw_data  # noqa: E402
 
 DATA_DIR = ROOT / "data"
 LATEST_FILE = DATA_DIR / "latest_snapshot.json"
@@ -41,10 +48,6 @@ BACKTEST_DIR = DATA_DIR / "backtest"
 RECOMMENDATION_STATE_FILE = DATA_DIR / "recommendation_state.json"
 
 SAMPLE_SECTORS = ["银行", "电子", "煤炭", "基础化工", "机械设备", "食品饮料", "医药生物", "电力设备"]
-BUY_BREADTH_FLOOR = 0.60
-SELL_BREADTH_FLOOR = 0.45
-MIN_SCORE = 58.0
-MAX_RISK = 55.0
 AFTER_CLOSE_TIME = dt_time(19, 0)
 
 
@@ -282,37 +285,53 @@ def _refresh_avix_payload(skip_avix: bool = False) -> dict:
     return _avix_payload_from_history(latest, avix_hist)
 
 
+def _comparison_row(label: str, bt: pd.DataFrame) -> dict | None:
+    summary = summarize_backtest(bt)
+    if not summary:
+        return None
+    return {
+        "策略": label,
+        "方向胜率": summary["胜率"],
+        "相对胜率": summary["相对胜率"],
+        "累计收益": summary["累计收益"],
+        "等权基准": summary["基准收益"],
+        "年化收益": summary["年化收益"],
+        "最大回撤": summary["最大回撤"],
+        "夏普比率": summary["夏普比率"],
+        "交易日数": summary["交易日数"],
+    }
+
+
 def _build_backtest_payload(lookback_days: int = 360) -> dict:
     generated_at = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
     try:
         scored = build_walk_forward_scores(520)
         if scored.empty:
             return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "empty", "error": "生产口径滚动评分结果为空"}
-        bt = _build_strategy_backtest(scored, lookback_days, "top3_balanced")
-        summary = _summarize_backtest(bt)
+
+        bt = build_top1_breadth_backtest(scored, lookback_days)
+        summary = summarize_backtest(bt)
+        if bt.empty or not summary:
+            return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "empty", "error": "Top1+广度过滤回测结果为空"}
+
         rows = []
-        strategy_names = {"top1": "Top1 单押", "top3_balanced": "Top3 稳健等权", "top3_regime": "Top3 + 广度过滤"}
-        for strategy, label in strategy_names.items():
-            s_bt = _build_strategy_backtest(scored, lookback_days, strategy)
-            s_summary = _summarize_backtest(s_bt)
-            if not s_summary:
-                continue
-            rows.append({
-                "策略": label,
-                "方向胜率": s_summary["胜率"],
-                "相对胜率": s_summary["相对胜率"],
-                "累计收益": s_summary["累计收益"],
-                "等权基准": s_summary["基准收益"],
-                "年化收益": s_summary["年化收益"],
-                "最大回撤": s_summary["最大回撤"],
-                "夏普比率": s_summary["夏普比率"],
-                "交易日数": s_summary["交易日数"],
-            })
+        primary_row = _comparison_row(PRIMARY_STRATEGY_LABEL, bt)
+        if primary_row:
+            rows.append(primary_row)
+        for strategy, label in {
+            "top1": "Top1 单押",
+            "top3_balanced": "Top3 稳健等权",
+            "top3_regime": "Top3 + 弱广度过滤",
+        }.items():
+            ref_row = _comparison_row(label, build_reference_backtest(scored, lookback_days, strategy))
+            if ref_row:
+                rows.append(ref_row)
         cmp_df = pd.DataFrame(rows)
+
         robust_rows = []
         for window in (120, 240, 360, 520):
-            w_bt = _build_strategy_backtest(scored, int(window), "top3_balanced")
-            w_summary = _summarize_backtest(w_bt)
+            w_bt = build_top1_breadth_backtest(scored, int(window))
+            w_summary = summarize_backtest(w_bt)
             if not w_summary:
                 continue
             robust_rows.append({
@@ -326,24 +345,35 @@ def _build_backtest_payload(lookback_days: int = 360) -> dict:
                 "夏普比率": w_summary["夏普比率"],
             })
         robust_df = pd.DataFrame(robust_rows)
-        if bt.empty or not summary:
-            return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "empty", "error": "回测结果为空"}
+
         recent = bt.tail(30).copy()
         if "date" in recent.columns:
-            recent["date"] = pd.to_datetime(recent["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            recent["date"] = pd.to_datetime(recent["date"], errors="coerce")
         if "strategy_ret" in recent.columns:
             recent["模型次日收益"] = pd.to_numeric(recent["strategy_ret"], errors="coerce") * 100
         if "benchmark_ret" in recent.columns:
             recent["等权次日收益"] = pd.to_numeric(recent["benchmark_ret"], errors="coerce") * 100
+        recent = recent.sort_values("date", ascending=False)
+        recent["date"] = recent["date"].dt.strftime("%Y-%m-%d")
+
         curve_cols = [c for c in ["date", "strategy_nav", "benchmark_nav"] if c in bt.columns]
         curve = bt[curve_cols].tail(260).copy()
         if "date" in curve.columns:
             curve["date"] = pd.to_datetime(curve["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        signal_cols = ["date", "持有板块", "综合博弈得分", "风险简分", "模型次日收益", "等权次日收益"]
+        signal_cols = ["date", "动作", "持有板块", "综合博弈得分", "风险简分", "市场广度", "模型次日收益", "等权次日收益"]
         return {
             "generated_at": generated_at,
             "lookback_days": lookback_days,
             "status": "ready",
+            "primary_strategy": PRIMARY_STRATEGY_KEY,
+            "primary_strategy_label": PRIMARY_STRATEGY_LABEL,
+            "strategy_rules": {
+                "buy_breadth_floor": BUY_BREADTH_FLOOR,
+                "sell_breadth_floor": SELL_BREADTH_FLOOR,
+                "min_score": MIN_SCORE,
+                "max_risk": MAX_RISK,
+                "selection": "Top1 by 综合博弈得分",
+            },
             "score_basis": PRODUCTION_SCORE_VERSION,
             "score_basis_note": "回测综合分按当前生产六层权重并纳入市场广度 regime_factor；历史缺少实时成分股快照，micro_factor 按生产缺省口径取 1.0。",
             "summary": summary,
