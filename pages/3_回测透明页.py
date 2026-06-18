@@ -11,7 +11,7 @@ from ui_theme import inject_theme, metric_card, page_header
 st.set_page_config(page_title="模型回测", layout="wide")
 inject_theme()
 
-page_header("模型回测", "收盘信号，下一交易日验证", "Walk-forward")
+page_header("模型回测", "今日推荐同口径：Top1 + 广度过滤，收盘信号下一交易日验证", "Walk-forward")
 
 payload = load_backtest_summary()
 if not payload:
@@ -27,10 +27,16 @@ generated_at = payload.get("generated_at", "-")
 lookback_days = payload.get("lookback_days", "-")
 score_basis = payload.get("score_basis", "legacy_or_unknown")
 score_basis_note = payload.get("score_basis_note", "")
+primary_strategy = payload.get("primary_strategy", "legacy_or_unknown")
+primary_label = payload.get("primary_strategy_label", "旧缓存策略")
+strategy_rules = payload.get("strategy_rules", {}) or {}
 
 if not summary or bt.empty:
     st.error(f"回测缓存不完整：{payload.get('error', '缺少 summary 或 recent_curve')}")
     st.stop()
+
+if primary_strategy != "top1_breadth":
+    st.warning("当前回测缓存不是 Top1 + 广度过滤新口径。请重新运行每日快照任务以刷新 data/backtest/strategy_summary.json。")
 
 
 def pct(value: float) -> str:
@@ -39,6 +45,24 @@ def pct(value: float) -> str:
     except Exception:
         return "-"
 
+
+buy_floor = float(strategy_rules.get("buy_breadth_floor", 0.60)) * 100
+sell_floor = float(strategy_rules.get("sell_breadth_floor", 0.45)) * 100
+min_score = float(strategy_rules.get("min_score", 58.0))
+max_risk = float(strategy_rules.get("max_risk", 55.0))
+
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+st.markdown(
+    f"""
+<div class="metric-grid">
+  {metric_card("主策略", primary_label, f"买入广度 ≥ {buy_floor:.0f}%")}
+  {metric_card("卖出规则", f"广度 < {sell_floor:.0f}%", "与今日推荐一致")}
+  {metric_card("买入阈值", f"综合 ≥ {min_score:.0f}", f"风险 < {max_risk:.0f}")}
+  {metric_card("窗口", f"{lookback_days} 日", "Walk-forward")}
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 st.markdown(
@@ -53,16 +77,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.caption(f"缓存生成：{generated_at} · 窗口：{lookback_days} 日 · 评分口径：{score_basis} · 数据源：data/backtest/strategy_summary.json")
+st.caption(f"缓存生成：{generated_at} · 主策略：{primary_label} · 评分口径：{score_basis} · 数据源：data/backtest/strategy_summary.json")
 if score_basis_note:
     st.caption(f"口径说明：{score_basis_note}")
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-st.markdown('<div class="panel"><div class="section-title">净值曲线</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="panel"><div class="section-title">净值曲线｜{primary_label}</div>', unsafe_allow_html=True)
 if "date" in bt.columns:
     bt["date"] = pd.to_datetime(bt["date"], errors="coerce")
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=bt["date"], y=bt["strategy_nav"], name="Top3 稳健等权", line=dict(color="#1f5eff", width=2.4)))
+fig.add_trace(go.Scatter(x=bt["date"], y=bt["strategy_nav"], name=primary_label, line=dict(color="#1f5eff", width=2.4)))
 fig.add_trace(go.Scatter(x=bt["date"], y=bt["benchmark_nav"], name="行业等权", line=dict(color="#667085", width=1.7)))
 fig.update_layout(
     height=430,
@@ -100,7 +124,7 @@ with left:
     st.markdown("</div>", unsafe_allow_html=True)
 
 with right:
-    st.markdown('<div class="panel"><div class="section-title">窗口稳健性</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="panel"><div class="section-title">窗口稳健性｜{primary_label}</div>', unsafe_allow_html=True)
     if robust_df.empty:
         st.caption("暂无窗口稳健性缓存。")
     else:
@@ -120,17 +144,20 @@ with right:
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-st.markdown('<div class="panel"><div class="section-title">最近信号</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="panel"><div class="section-title">最近信号｜{primary_label}</div>', unsafe_allow_html=True)
 if recent.empty:
     st.caption("暂无最近信号缓存。")
 else:
     if "date" in recent.columns:
-        recent["date"] = pd.to_datetime(recent["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    show_cols = ["date", "持有板块", "综合博弈得分", "风险简分", "模型次日收益", "等权次日收益"]
+        recent["date"] = pd.to_datetime(recent["date"], errors="coerce")
+        recent = recent.sort_values("date", ascending=False)
+        recent["date"] = recent["date"].dt.strftime("%Y-%m-%d")
+    show_cols = ["date", "动作", "持有板块", "综合博弈得分", "风险简分", "市场广度", "模型次日收益", "等权次日收益"]
     st.dataframe(
         recent[[c for c in show_cols if c in recent.columns]].style.format({
             "综合博弈得分": "{:.1f}",
             "风险简分": "{:.1f}",
+            "市场广度": "{:.1f}",
             "模型次日收益": "{:+.2f}%",
             "等权次日收益": "{:+.2f}%",
         }),
