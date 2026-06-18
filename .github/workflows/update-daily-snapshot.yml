@@ -13,7 +13,7 @@ on:
 
 concurrency:
   group: daily-snapshot
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -41,9 +41,9 @@ jobs:
       - name: Update snapshot
         run: |
           if [ -n "${{ inputs.target_date }}" ]; then
-            python scripts/run_daily_snapshot_ready.py --target-date "${{ inputs.target_date }}" --force
+            python scripts/update_daily_snapshot.py --target-date "${{ inputs.target_date }}" --force
           else
-            python scripts/run_daily_snapshot_ready.py
+            python scripts/update_daily_snapshot.py
           fi
 
       - name: Commit data changes
