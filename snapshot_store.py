@@ -13,6 +13,7 @@ LATEST_FILE = DATA_DIR / "latest_snapshot.json"
 STATUS_FILE = DATA_DIR / "update_status.json"
 BOARD_HISTORY_FILE = DATA_DIR / "sw_board_history.csv"
 HISTORY_DIR = DATA_DIR / "history"
+RECOMMENDATION_STATE_FILE = DATA_DIR / "recommendation_state.json"
 BACKTEST_SUMMARY_FILE = DATA_DIR / "backtest" / "strategy_summary.json"
 
 
@@ -62,6 +63,26 @@ def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return res
 
 
+def _state_is_flat_without_sell() -> bool:
+    state = _load_json_file(RECOMMENDATION_STATE_FILE)
+    return bool(
+        state
+        and state.get("position_state") == "flat"
+        and not state.get("holdings")
+        and not state.get("last_sell")
+    )
+
+
+def _sanitize_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload or not _state_is_flat_without_sell():
+        return payload
+    out = dict(payload)
+    clarity = dict(out.get("clarity_signal") or {})
+    clarity["sell"] = []
+    out["clarity_signal"] = clarity
+    return out
+
+
 def _snapshot_frame_from_payload(payload: dict[str, Any]) -> pd.DataFrame:
     trade_date = str(payload.get("trade_date", ""))[:10]
     updated_at = str(payload.get("updated_at", ""))
@@ -80,13 +101,13 @@ def _snapshot_frame_from_payload(payload: dict[str, Any]) -> pd.DataFrame:
 
 @st.cache_data(ttl=60, show_spinner=False)
 def load_latest_snapshot() -> dict[str, Any]:
-    return _load_json_file(LATEST_FILE)
+    return _sanitize_snapshot(_load_json_file(LATEST_FILE))
 
 
 @st.cache_data(ttl=60, show_spinner=False)
 def load_update_status() -> dict[str, Any]:
     status = _load_json_file(STATUS_FILE)
-    snapshot = _load_json_file(LATEST_FILE)
+    snapshot = load_latest_snapshot()
     trade_date = str(snapshot.get("trade_date", ""))
     target_date = str(status.get("target_trade_date", status.get("target_date", ""))) if status else ""
     if snapshot.get("status") == "ready" and trade_date and (not target_date or target_date == trade_date):
