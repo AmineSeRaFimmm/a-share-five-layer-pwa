@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import run_daily_snapshot as runner
+import update_daily_snapshot as runner
 
 
 def main() -> int:
