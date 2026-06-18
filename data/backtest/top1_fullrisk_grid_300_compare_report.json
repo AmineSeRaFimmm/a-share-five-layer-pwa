@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-06-18 20:59:17",
+  "generated_at": "2026-06-18 21:43:47",
   "status": "ready",
-  "update_mode": "shadow_compare",
-  "promoted": false,
+  "update_mode": "promote",
+  "promoted": true,
   "script": "scripts/generate_fullrisk_grid_300.py",
   "method": "daily_recomputed_full_3d_risk_no_simple_fallback",
   "lookback_days": 300,
