@@ -41,6 +41,61 @@ def pct(value: float) -> str:
         return "-"
 
 
+def pct_plain(value: object) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return "-"
+        return f"{float(value) * 100:.2f}%"
+    except Exception:
+        return "-"
+
+
+def signed_pct(value: object) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return "-"
+        return f"{float(value) * 100:+.2f}%"
+    except Exception:
+        return "-"
+
+
+def number(value: object, digits: int = 2) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return "-"
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return "-"
+
+
+def count_value(value: object) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return "-"
+        return f"{float(value):.0f}"
+    except Exception:
+        return "-"
+
+
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+st.markdown(
+    f"""
+<div class="metric-grid">
+  {metric_card("持仓日胜率", pct_plain(summary.get('持仓日胜率')), "仅统计持仓日")}
+  {metric_card("交易胜率", pct_plain(summary.get('交易胜率')), "单笔交易维度")}
+  {metric_card("平均盈利", signed_pct(summary.get('平均盈利')), "盈利交易均值")}
+  {metric_card("平均亏损", signed_pct(summary.get('平均亏损')), "亏损交易均值")}
+</div>
+<div class="metric-grid" style="margin-top:12px;">
+  {metric_card("盈亏比", number(summary.get('盈亏比')), "平均盈利 / 平均亏损")}
+  {metric_card("持仓暴露率", pct_plain(summary.get('持仓暴露率')), "持仓日 / 全部交易日")}
+  {metric_card("交易次数", count_value(summary.get('交易次数')), "回测窗口内")}
+  {metric_card("成本后收益", signed_pct(summary.get('成本后收益')), "若缓存提供成本字段")}
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 st.markdown(
     f"""
@@ -110,13 +165,21 @@ with left:
             cmp_df.style.format({
                 "方向胜率": "{:.1%}",
                 "相对胜率": "{:.1%}",
+                "持仓日胜率": "{:.1%}",
+                "交易胜率": "{:.1%}",
+                "平均盈利": "{:+.2%}",
+                "平均亏损": "{:+.2%}",
+                "盈亏比": "{:.2f}",
+                "持仓暴露率": "{:.1%}",
+                "交易次数": "{:.0f}",
+                "成本后收益": "{:+.2%}",
                 "累计收益": "{:+.2%}",
                 "等权基准": "{:+.2%}",
                 "年化收益": "{:+.2%}",
                 "最大回撤": "{:+.2%}",
                 "夏普比率": "{:.2f}",
                 "交易日数": "{:.0f}",
-            }),
+            }, na_rep="-"),
             hide_index=True,
             width="stretch",
         )
