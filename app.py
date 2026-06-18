@@ -117,20 +117,19 @@ main_col, side_col = st.columns([2.15, 1], gap="medium")
 
 with main_col:
     st.markdown('<div class="panel"><div class="section-title">综合排名</div>', unsafe_allow_html=True)
+    ranking_df = df.sort_values("综合博弈得分", ascending=False).copy() if "综合博弈得分" in df.columns else df.copy()
     show_cols = [
-        "板块名称", "数据日期", "信号", "涨跌幅", "综合博弈得分", "逃顶风险分", "入场共振分",
+        "板块名称", "涨跌幅", "综合博弈得分", "逃顶风险分", "入场共振分",
         "动态水位", "趋势加速度", "资金流向", "上涨占比", "对应ETF",
     ]
-    show_cols = [c for c in show_cols if c in df.columns]
+    show_cols = [c for c in show_cols if c in ranking_df.columns]
     st.dataframe(
-        df[show_cols],
+        ranking_df[show_cols],
         height=620,
         hide_index=True,
         width="stretch",
         column_config={
             "板块名称": st.column_config.TextColumn("板块", width="small"),
-            "数据日期": st.column_config.TextColumn("日期", width="small"),
-            "信号": st.column_config.TextColumn("信号", width="medium"),
             "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%+.2f%%"),
             "综合博弈得分": st.column_config.ProgressColumn("综合分", min_value=0, max_value=100, format="%.1f"),
             "逃顶风险分": st.column_config.ProgressColumn("风险", min_value=0, max_value=100, format="%.1f"),
