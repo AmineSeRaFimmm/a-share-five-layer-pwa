@@ -25,6 +25,8 @@ robust_df = pd.DataFrame(payload.get("window_robustness", []) or [])
 recent = pd.DataFrame(payload.get("recent_signals", []) or [])
 generated_at = payload.get("generated_at", "-")
 lookback_days = payload.get("lookback_days", "-")
+score_basis = payload.get("score_basis", "legacy_or_unknown")
+score_basis_note = payload.get("score_basis_note", "")
 
 if not summary or bt.empty:
     st.error(f"回测缓存不完整：{payload.get('error', '缺少 summary 或 recent_curve')}")
@@ -51,7 +53,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.caption(f"缓存生成：{generated_at} · 窗口：{lookback_days} 日 · 数据源：data/backtest/strategy_summary.json")
+st.caption(f"缓存生成：{generated_at} · 窗口：{lookback_days} 日 · 评分口径：{score_basis} · 数据源：data/backtest/strategy_summary.json")
+if score_basis_note:
+    st.caption(f"口径说明：{score_basis_note}")
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 st.markdown('<div class="panel"><div class="section-title">净值曲线</div>', unsafe_allow_html=True)
