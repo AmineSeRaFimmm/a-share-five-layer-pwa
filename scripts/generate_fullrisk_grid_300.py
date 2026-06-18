@@ -34,6 +34,9 @@ DEDUP_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_dedup_top.csv"
 METADATA_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_metadata.json"
 PANEL_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_panel.parquet"
 PRIMARY_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_primary_path.csv"
+STRATEGY_COMPARISON_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_strategy_comparison.csv"
+WINDOW_ROBUSTNESS_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_window_robustness.csv"
+RECENT_SIGNALS_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_recent_signals.csv"
 
 # Shadow files generated daily until the new generator is reconciled with the trusted baseline.
 CANDIDATE_RESULTS_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_results_candidate.csv"
@@ -42,6 +45,9 @@ CANDIDATE_DEDUP_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_dedup_top_candidat
 CANDIDATE_METADATA_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_metadata_candidate.json"
 CANDIDATE_PANEL_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_panel_candidate.parquet"
 CANDIDATE_PRIMARY_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_primary_path_candidate.csv"
+CANDIDATE_STRATEGY_COMPARISON_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_strategy_comparison_candidate.csv"
+CANDIDATE_WINDOW_ROBUSTNESS_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_window_robustness_candidate.csv"
+CANDIDATE_RECENT_SIGNALS_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_recent_signals_candidate.csv"
 COMPARE_REPORT_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_compare_report.json"
 
 LOOKBACK_DAYS = 300
@@ -56,6 +62,7 @@ BUY_BREADTHS = [0.55, 0.60, 0.65, 0.70]
 SELL_BREADTHS = [0.35, 0.40, 0.45, 0.50]
 SCORE_THRESHOLDS = [54, 56, 58, 60, 62, 65]
 RISK_THRESHOLDS = [45, 50, 55, 65]
+WINDOWS = [120, 180, 240, 300]
 
 COMPARE_METRICS = [
     "累计收益",
@@ -124,6 +131,43 @@ def _normalize_sw_history(raw: pd.DataFrame) -> pd.DataFrame:
     for col in needed[1:]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     return df.dropna(subset=needed).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
+def _normalize_hs300(raw: pd.DataFrame) -> pd.DataFrame:
+    rename: dict[object, str] = {}
+    for col in raw.columns:
+        c = str(col)
+        lower = c.lower()
+        if "日期" in c or lower == "date":
+            rename[col] = "date"
+        elif c in ("收盘", "close"):
+            rename[col] = "close"
+    df = raw.rename(columns=rename)
+    if not {"date", "close"}.issubset(df.columns):
+        return pd.DataFrame()
+    out = df[["date", "close"]].copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+    out["close"] = pd.to_numeric(out["close"], errors="coerce")
+    return out.dropna(subset=["date", "close"]).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
+def _fetch_hs300_history() -> pd.DataFrame:
+    errors: list[str] = []
+    try:
+        raw = ak.index_zh_a_hist(symbol="000300", period="daily")
+        hist = _normalize_hs300(raw)
+        if not hist.empty:
+            return hist
+    except Exception as exc:
+        errors.append(f"index_zh_a_hist: {exc}")
+    try:
+        raw = ak.stock_zh_index_daily(symbol="sh000300")
+        hist = _normalize_hs300(raw)
+        if not hist.empty:
+            return hist
+    except Exception as exc:
+        errors.append(f"stock_zh_index_daily: {exc}")
+    raise RuntimeError("沪深300指数历史数据获取失败：" + "；".join(errors))
 
 
 def _fetch_histories(extra_days: int = 180) -> Dict[str, pd.DataFrame]:
@@ -309,70 +353,14 @@ def _max_drawdown(nav: pd.Series) -> float:
     return float((nav / nav.cummax() - 1.0).min())
 
 
-def run_top1_fullrisk_backtest(panel: pd.DataFrame, buy_breadth: float, sell_breadth: float, min_score: float, max_risk: float) -> tuple[pd.DataFrame, dict]:
-    rows = []
-    current_position = ""
-    current_trade_id = 0
-    next_trade_id = 0
-    for dt, day in panel.groupby("date", sort=True):
-        day = day.copy()
-        breadth = float((day["涨跌幅"] > 0).mean())
-        benchmark_ret = float(day["next_ret"].mean())
-        new_position = current_position
-        if breadth < sell_breadth:
-            new_position = ""
-        elif breadth >= buy_breadth:
-            picks = (
-                day[(day["综合博弈得分"] >= min_score) & (day["逃顶风险分"] < max_risk)]
-                .sort_values("综合博弈得分", ascending=False)
-                .head(1)
-            )
-            if not picks.empty:
-                new_position = str(picks.iloc[0]["板块名称"])
-        if new_position != current_position:
-            if new_position:
-                next_trade_id += 1
-                current_trade_id = next_trade_id
-            else:
-                current_trade_id = 0
-        current_position = new_position
-        held = day[day["板块名称"].astype(str) == current_position] if current_position else pd.DataFrame()
-        if held.empty:
-            ret = 0.0
-            score = 0.0
-            risk = 0.0
-            trade_id = np.nan
-            name = "空仓"
-        else:
-            row = held.iloc[0]
-            ret = float(row["next_ret"])
-            score = float(row["综合博弈得分"])
-            risk = float(row["逃顶风险分"])
-            trade_id = current_trade_id
-            name = current_position
-        rows.append({
-            "date": dt,
-            "持有板块": name,
-            "trade_id": trade_id,
-            "strategy_ret": ret,
-            "benchmark_ret": benchmark_ret,
-            "综合博弈得分": score,
-            "逃顶风险分": risk,
-            "市场广度": breadth,
-            "direction_hit": ret > 0,
-            "relative_hit": ret > benchmark_ret,
-            "is_holding": bool(current_position),
-        })
-    bt = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+def _summarize_path(bt: pd.DataFrame, buy_breadth: float, sell_breadth: float, min_score: float, max_risk: float) -> dict:
     if bt.empty:
-        return bt, {}
-    bt["strategy_nav"] = (1.0 + bt["strategy_ret"]).cumprod()
-    bt["benchmark_nav"] = (1.0 + bt["benchmark_ret"]).cumprod()
+        return {}
     trade_ret = _trade_returns(bt)
     wins = trade_ret[trade_ret > 0]
     losses = trade_ret[trade_ret < 0]
     profit_factor = float(wins.sum() / abs(losses.sum())) if not losses.empty and abs(float(losses.sum())) > 1e-12 else np.nan
-    summary = {
+    return {
         "买入广度": buy_breadth,
         "卖出广度": sell_breadth,
         "综合分阈值": min_score,
@@ -388,10 +376,99 @@ def run_top1_fullrisk_backtest(panel: pd.DataFrame, buy_breadth: float, sell_bre
         "最长连续亏损": _max_losing_streak(trade_ret.tolist()),
         "持仓占比": float(bt["is_holding"].mean()),
     }
+
+
+def _attach_hs300(bt: pd.DataFrame, hs300: pd.DataFrame) -> pd.DataFrame:
+    out = bt.copy()
+    hs = hs300.copy()
+    hs["hs300_ret"] = hs["close"].shift(-1) / (hs["close"] + 1e-9) - 1.0
+    out = out.merge(hs[["date", "hs300_ret"]], on="date", how="left")
+    if out["hs300_ret"].isna().any():
+        missing = out.loc[out["hs300_ret"].isna(), "date"].dt.strftime("%Y-%m-%d").head(5).tolist()
+        raise RuntimeError(f"沪深300指数收益缺失，示例日期：{missing}")
+    out["hs300_nav"] = (1.0 + out["hs300_ret"]).cumprod()
+    return out
+
+
+def run_top1_fullrisk_backtest(panel: pd.DataFrame, buy_breadth: float, sell_breadth: float, min_score: float, max_risk: float, hs300: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
+    rows = []
+    current_position = ""
+    current_trade_id = 0
+    next_trade_id = 0
+    for dt, day in panel.groupby("date", sort=True):
+        day = day.copy()
+        breadth = float((day["涨跌幅"] > 0).mean())
+        benchmark_ret = float(day["next_ret"].mean())
+        new_position = current_position
+        action = "持有" if current_position else "空仓"
+        if breadth < sell_breadth:
+            new_position = ""
+            action = "卖出" if current_position else "空仓"
+        elif breadth >= buy_breadth:
+            picks = (
+                day[(day["综合博弈得分"] >= min_score) & (day["逃顶风险分"] < max_risk)]
+                .sort_values("综合博弈得分", ascending=False)
+                .head(1)
+            )
+            if not picks.empty:
+                picked = str(picks.iloc[0]["板块名称"])
+                if not current_position:
+                    action = "买入"
+                elif picked != current_position:
+                    action = "换仓"
+                else:
+                    action = "持有"
+                new_position = picked
+        if new_position != current_position:
+            if new_position:
+                next_trade_id += 1
+                current_trade_id = next_trade_id
+            else:
+                current_trade_id = 0
+        current_position = new_position
+        held = day[day["板块名称"].astype(str) == current_position] if current_position else pd.DataFrame()
+        if held.empty:
+            ret = 0.0
+            score = 0.0
+            risk = 0.0
+            resonance = 0.0
+            trade_id = np.nan
+            name = "空仓"
+        else:
+            row = held.iloc[0]
+            ret = float(row["next_ret"])
+            score = float(row["综合博弈得分"])
+            risk = float(row["逃顶风险分"])
+            resonance = float(row.get("入场共振分", 0.0))
+            trade_id = current_trade_id
+            name = current_position
+        rows.append({
+            "date": dt,
+            "持有板块": name,
+            "动作": action,
+            "trade_id": trade_id,
+            "strategy_ret": ret,
+            "benchmark_ret": benchmark_ret,
+            "综合博弈得分": score,
+            "逃顶风险分": risk,
+            "入场共振分": resonance,
+            "市场广度": breadth,
+            "direction_hit": ret > 0,
+            "relative_hit": ret > benchmark_ret,
+            "is_holding": bool(current_position),
+        })
+    bt = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+    if bt.empty:
+        return bt, {}
+    bt["strategy_nav"] = (1.0 + bt["strategy_ret"]).cumprod()
+    bt["benchmark_nav"] = (1.0 + bt["benchmark_ret"]).cumprod()
+    if hs300 is not None:
+        bt = _attach_hs300(bt, hs300)
+    summary = _summarize_path(bt, buy_breadth, sell_breadth, min_score, max_risk)
     return bt, summary
 
 
-def _grid_results(panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _grid_results(panel: pd.DataFrame, hs300: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     rows = []
     primary_bt = pd.DataFrame()
     for buy in BUY_BREADTHS:
@@ -412,6 +489,7 @@ def _grid_results(panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     results = results.sort_values(["累计收益", "最大回撤", "交易胜率"], ascending=[False, False, False]).reset_index(drop=True)
     if primary_bt.empty:
         raise RuntimeError("主策略 70/35/54/45 路径为空")
+    primary_bt = _attach_hs300(primary_bt, hs300)
     return results, primary_bt
 
 
@@ -502,12 +580,70 @@ def _compare_primary(candidate: dict, official: dict | None) -> dict:
     }
 
 
-def _write_outputs(results: pd.DataFrame, dedup: pd.DataFrame, primary_bt: pd.DataFrame, panel: pd.DataFrame, metadata: dict, promote: bool) -> None:
+def _strategy_comparison(results: pd.DataFrame) -> pd.DataFrame:
+    items = [
+        ("主策略：70/35/54/45", 0.70, 0.35, 54, 45),
+        ("低广度确认：60/45/58/55", 0.60, 0.45, 58, 55),
+        ("高分确认：70/35/60/45", 0.70, 0.35, 60, 45),
+        ("低风险优先：70/35/54/50", 0.70, 0.35, 54, 50),
+    ]
+    rows = []
+    for label, buy, sell, score, risk in items:
+        row = results[
+            (results["买入广度"].round(4) == buy)
+            & (results["卖出广度"].round(4) == sell)
+            & (results["综合分阈值"].round(4) == score)
+            & (results["风险分阈值"].round(4) == risk)
+        ]
+        if row.empty:
+            continue
+        item = row.iloc[0].to_dict()
+        item["策略"] = label
+        rows.append(item)
+    if not rows:
+        return pd.DataFrame()
+    cols = ["策略", "买入广度", "卖出广度", "综合分阈值", "风险分阈值", *COMPARE_METRICS]
+    return pd.DataFrame(rows)[[c for c in cols if c in pd.DataFrame(rows).columns]]
+
+
+def _window_robustness(panel: pd.DataFrame, hs300: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for window in WINDOWS:
+        sub = panel.sort_values("date").groupby("date", sort=True).filter(lambda x: True)
+        dates = sorted(sub["date"].dropna().unique())[-window:]
+        sub = sub[sub["date"].isin(dates)].copy()
+        bt, summary = run_top1_fullrisk_backtest(sub, PRIMARY_BUY_BREADTH, PRIMARY_SELL_BREADTH, PRIMARY_MIN_SCORE, PRIMARY_MAX_RISK, hs300=hs300)
+        if not summary:
+            continue
+        summary["窗口"] = f"{window}日"
+        summary["沪深300收益"] = float(bt["hs300_nav"].iloc[-1] - 1.0) if "hs300_nav" in bt.columns else np.nan
+        summary["行业等权收益"] = float(bt["benchmark_nav"].iloc[-1] - 1.0) if "benchmark_nav" in bt.columns else np.nan
+        rows.append(summary)
+    if not rows:
+        return pd.DataFrame()
+    cols = ["窗口", "累计收益", "行业等权收益", "沪深300收益", "年化收益", "最大回撤", "交易次数", "交易胜率", "日胜率", "相对胜率", "profit_factor", "持仓占比"]
+    return pd.DataFrame(rows)[[c for c in cols if c in pd.DataFrame(rows).columns]]
+
+
+def _recent_signals(primary_bt: pd.DataFrame, n: int = 30) -> pd.DataFrame:
+    out = primary_bt.copy().sort_values("date", ascending=False).head(n)
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    for col in ["strategy_ret", "benchmark_ret", "hs300_ret", "市场广度"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    cols = ["date", "持有板块", "动作", "综合博弈得分", "逃顶风险分", "入场共振分", "市场广度", "strategy_ret", "benchmark_ret", "hs300_ret"]
+    return out[[c for c in cols if c in out.columns]]
+
+
+def _write_outputs(results: pd.DataFrame, dedup: pd.DataFrame, primary_bt: pd.DataFrame, panel: pd.DataFrame, metadata: dict, strategy_cmp: pd.DataFrame, window_robust: pd.DataFrame, recent_signals: pd.DataFrame, promote: bool) -> None:
     BACKTEST_DIR.mkdir(parents=True, exist_ok=True)
     results.to_csv(CANDIDATE_RESULTS_FILE, index=False, encoding="utf-8-sig")
     results.head(20).to_csv(CANDIDATE_TOP20_FILE, index=False, encoding="utf-8-sig")
     dedup.head(20).to_csv(CANDIDATE_DEDUP_FILE, index=False, encoding="utf-8-sig")
     primary_bt.to_csv(CANDIDATE_PRIMARY_FILE, index=False, encoding="utf-8-sig")
+    strategy_cmp.to_csv(CANDIDATE_STRATEGY_COMPARISON_FILE, index=False, encoding="utf-8-sig")
+    window_robust.to_csv(CANDIDATE_WINDOW_ROBUSTNESS_FILE, index=False, encoding="utf-8-sig")
+    recent_signals.to_csv(CANDIDATE_RECENT_SIGNALS_FILE, index=False, encoding="utf-8-sig")
     _write_json(CANDIDATE_METADATA_FILE, metadata)
     try:
         panel.to_parquet(CANDIDATE_PANEL_FILE, index=False)
@@ -519,6 +655,9 @@ def _write_outputs(results: pd.DataFrame, dedup: pd.DataFrame, primary_bt: pd.Da
         results.head(20).to_csv(TOP20_FILE, index=False, encoding="utf-8-sig")
         dedup.head(20).to_csv(DEDUP_FILE, index=False, encoding="utf-8-sig")
         primary_bt.to_csv(PRIMARY_FILE, index=False, encoding="utf-8-sig")
+        strategy_cmp.to_csv(STRATEGY_COMPARISON_FILE, index=False, encoding="utf-8-sig")
+        window_robust.to_csv(WINDOW_ROBUSTNESS_FILE, index=False, encoding="utf-8-sig")
+        recent_signals.to_csv(RECENT_SIGNALS_FILE, index=False, encoding="utf-8-sig")
         _write_json(METADATA_FILE, {**metadata, "promoted": True})
         try:
             panel.to_parquet(PANEL_FILE, index=False)
@@ -529,8 +668,12 @@ def _write_outputs(results: pd.DataFrame, dedup: pd.DataFrame, primary_bt: pd.Da
 def generate_fullrisk_grid_300(promote: bool = False) -> dict:
     BACKTEST_DIR.mkdir(parents=True, exist_ok=True)
     panel = build_fullrisk_panel()
-    results, primary_bt = _grid_results(panel)
+    hs300 = _fetch_hs300_history()
+    results, primary_bt = _grid_results(panel, hs300)
     dedup = _dedup_results(results)
+    strategy_cmp = _strategy_comparison(results)
+    window_robust = _window_robustness(panel, hs300)
+    recent_signals = _recent_signals(primary_bt)
     candidate_primary = _primary_row(results)
     official_primary = _load_official_primary()
     compare = _compare_primary(candidate_primary, official_primary)
@@ -563,6 +706,9 @@ def generate_fullrisk_grid_300(promote: bool = False) -> dict:
             "candidate_top20": str(CANDIDATE_TOP20_FILE.relative_to(ROOT)),
             "candidate_dedup_top": str(CANDIDATE_DEDUP_FILE.relative_to(ROOT)),
             "candidate_primary_path": str(CANDIDATE_PRIMARY_FILE.relative_to(ROOT)),
+            "candidate_strategy_comparison": str(CANDIDATE_STRATEGY_COMPARISON_FILE.relative_to(ROOT)),
+            "candidate_window_robustness": str(CANDIDATE_WINDOW_ROBUSTNESS_FILE.relative_to(ROOT)),
+            "candidate_recent_signals": str(CANDIDATE_RECENT_SIGNALS_FILE.relative_to(ROOT)),
             "compare_report": str(COMPARE_REPORT_FILE.relative_to(ROOT)),
             "official_results": str(RESULTS_FILE.relative_to(ROOT)),
         },
@@ -572,10 +718,11 @@ def generate_fullrisk_grid_300(promote: bool = False) -> dict:
             "next_ret 仅用于下一交易日验证，不进入当日评分",
             "主策略参数固定为 70/35/54/45",
             "当前版本暂不加入 ETF 成本",
+            "正式净值曲线包含策略、行业等权和沪深300指数三条线",
             "默认影子对账模式不覆盖正式表，只有 --promote 才覆盖",
         ],
     }
-    _write_outputs(results, dedup, primary_bt, panel, metadata, promote=promote)
+    _write_outputs(results, dedup, primary_bt, panel, metadata, strategy_cmp, window_robust, recent_signals, promote=promote)
     _write_json(COMPARE_REPORT_FILE, {**metadata, "comparison": compare})
     return {**metadata, "comparison": compare}
 
