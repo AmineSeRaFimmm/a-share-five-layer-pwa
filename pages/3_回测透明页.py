@@ -46,19 +46,53 @@ def pct(value: float) -> str:
         return "-"
 
 
-buy_floor = float(strategy_rules.get("buy_breadth_floor", 0.60)) * 100
-sell_floor = float(strategy_rules.get("sell_breadth_floor", 0.45)) * 100
-min_score = float(strategy_rules.get("min_score", 58.0))
-max_risk = float(strategy_rules.get("max_risk", 55.0))
+def pct_plain(value: float | None) -> str:
+    if value is None:
+        return "-"
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except Exception:
+        return "-"
+
+
+def pct_signed(value: float | None) -> str:
+    if value is None:
+        return "-"
+    try:
+        return f"{float(value) * 100:+.2f}%"
+    except Exception:
+        return "-"
+
+
+def number_plain(value: float | None) -> str:
+    if value is None:
+        return "-"
+    try:
+        return f"{float(value):.2f}"
+    except Exception:
+        return "-"
+
+
+cost_rate = summary.get("单边成本假设", 0.001)
+try:
+    cost_note = f"单边成本 {float(cost_rate) * 100:.2f}%"
+except Exception:
+    cost_note = "含交易成本"
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 st.markdown(
     f"""
 <div class="metric-grid">
-  {metric_card("主策略", primary_label, f"买入广度 ≥ {buy_floor:.0f}%")}
-  {metric_card("卖出规则", f"广度 < {sell_floor:.0f}%", "与今日推荐一致")}
-  {metric_card("买入阈值", f"综合 ≥ {min_score:.0f}", f"风险 < {max_risk:.0f}")}
-  {metric_card("窗口", f"{lookback_days} 日", "Walk-forward")}
+  {metric_card("持仓日胜率", pct_plain(summary.get("持仓日胜率")), "仅统计实际持仓日")}
+  {metric_card("交易胜率", pct_plain(summary.get("交易胜率")), "按单笔交易复利收益")}
+  {metric_card("平均盈利", pct_signed(summary.get("平均盈利")), "盈利交易均值")}
+  {metric_card("平均亏损", pct_signed(summary.get("平均亏损")), "亏损交易均值")}
+</div>
+<div class="metric-grid" style="margin-top:12px;">
+  {metric_card("盈亏比", number_plain(summary.get("盈亏比")), "平均盈利 / 平均亏损绝对值")}
+  {metric_card("持仓暴露率", pct_plain(summary.get("持仓暴露率")), "持仓日 / 总交易日")}
+  {metric_card("交易次数", f"{int(float(summary.get('交易次数', 0)))}", f"{lookback_days}日窗口")}
+  {metric_card("成本后收益", pct(summary.get("成本后收益", 0)), cost_note)}
 </div>
 """,
     unsafe_allow_html=True,
@@ -68,7 +102,7 @@ st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 st.markdown(
     f"""
 <div class="metric-grid">
-  {metric_card("方向胜率", f"{float(summary.get('胜率', 0)) * 100:.1f}%", "收益大于 0")}
+  {metric_card("方向胜率", f"{float(summary.get('胜率', 0)) * 100:.1f}%", "全交易日收益 > 0")}
   {metric_card("相对胜率", f"{float(summary.get('相对胜率', 0)) * 100:.1f}%", "跑赢行业等权")}
   {metric_card("累计收益", pct(summary.get("累计收益", 0)), f"基准 {pct(summary.get('基准收益', 0))}")}
   {metric_card("最大回撤", pct(summary.get("最大回撤", 0)), f"夏普 {float(summary.get('夏普比率', 0)):.2f}")}
