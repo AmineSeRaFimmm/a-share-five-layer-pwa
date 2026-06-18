@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from pathlib import Path
 
 from snapshot_store import load_backtest_summary
 from ui_theme import inject_theme, metric_card, page_header
@@ -26,6 +27,9 @@ robust_df = pd.DataFrame(payload.get("window_robustness", []) or [])
 recent = pd.DataFrame(payload.get("recent_signals", []) or [])
 generated_at = payload.get("generated_at", "-")
 lookback_days = payload.get("lookback_days", "-")
+score_basis = payload.get("score_basis", "-")
+score_basis_note = payload.get("score_basis_note", "")
+transaction_cost_rate = payload.get("transaction_cost_rate", summary.get("单边成本假设", None))
 fullrisk_top_path = Path("data/backtest/top1_fullrisk_grid_300_dedup_top.csv")
 fullrisk_top = pd.read_csv(fullrisk_top_path) if fullrisk_top_path.exists() else pd.DataFrame()
 
@@ -77,6 +81,15 @@ def count_value(value: object) -> str:
         return "-"
 
 
+def bp_text(value: object) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return "-"
+        return f"{float(value) * 10000:.1f}bp"
+    except Exception:
+        return "-"
+
+
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 st.markdown(
     f"""
@@ -90,7 +103,7 @@ st.markdown(
   {metric_card("盈亏比", number(summary.get('盈亏比')), "平均盈利 / 平均亏损")}
   {metric_card("持仓暴露率", pct_plain(summary.get('持仓暴露率')), "持仓日 / 全部交易日")}
   {metric_card("交易次数", count_value(summary.get('交易次数')), "回测窗口内")}
-  {metric_card("成本后收益", signed_pct(summary.get('成本后收益')), "若缓存提供成本字段")}
+  {metric_card("成本后收益", signed_pct(summary.get('成本后收益')), f"单边成本 {bp_text(transaction_cost_rate)}")}
 </div>
 """,
     unsafe_allow_html=True,
@@ -111,8 +124,11 @@ st.markdown(
 
 st.caption(
     f"缓存生成：{generated_at} · 窗口：{lookback_days} 日 · "
+    f"口径：{score_basis} · 单边成本：{bp_text(transaction_cost_rate)} · "
     "主策略：Top1 + 广度过滤（买入70% / 卖出35% / 综合分>=54 / 风险<45）"
 )
+if score_basis_note:
+    st.info(score_basis_note)
 
 if not fullrisk_top.empty:
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
@@ -140,7 +156,9 @@ st.markdown('<div class="panel"><div class="section-title">净值曲线</div>', 
 if "date" in bt.columns:
     bt["date"] = pd.to_datetime(bt["date"], errors="coerce")
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=bt["date"], y=bt["strategy_nav"], name="Top1 + 广度过滤", line=dict(color="#1f5eff", width=2.4)))
+fig.add_trace(go.Scatter(x=bt["date"], y=bt["strategy_nav"], name="策略毛净值", line=dict(color="#1f5eff", width=2.4)))
+if "net_strategy_nav" in bt.columns:
+    fig.add_trace(go.Scatter(x=bt["date"], y=bt["net_strategy_nav"], name="策略成本后净值", line=dict(color="#12b76a", width=2.2)))
 fig.add_trace(go.Scatter(x=bt["date"], y=bt["benchmark_nav"], name="行业等权", line=dict(color="#667085", width=1.7)))
 fig.update_layout(
     height=430,
@@ -195,6 +213,7 @@ with right:
                 "方向胜率": "{:.1%}",
                 "相对胜率": "{:.1%}",
                 "累计收益": "{:+.2%}",
+                "成本后收益": "{:+.2%}",
                 "等权基准": "{:+.2%}",
                 "年化收益": "{:+.2%}",
                 "最大回撤": "{:+.2%}",
@@ -212,13 +231,22 @@ if recent.empty:
 else:
     if "date" in recent.columns:
         recent["date"] = pd.to_datetime(recent["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    show_cols = ["date", "持有板块", "综合博弈得分", "风险分", "风险简分", "模型次日收益", "等权次日收益"]
+    show_cols = [
+        "date", "持有板块", "action", "综合博弈得分", "风险分", "风险简分",
+        "市场广度", "regime_factor", "micro_factor", "transaction_cost",
+        "模型次日收益", "成本后次日收益", "等权次日收益",
+    ]
     st.dataframe(
         recent[[c for c in show_cols if c in recent.columns]].style.format({
             "综合博弈得分": "{:.1f}",
             "风险分": "{:.1f}",
             "风险简分": "{:.1f}",
+            "市场广度": "{:.1f}",
+            "regime_factor": "{:.2f}",
+            "micro_factor": "{:.2f}",
+            "transaction_cost": "{:.4%}",
             "模型次日收益": "{:+.2f}%",
+            "成本后次日收益": "{:+.2f}%",
             "等权次日收益": "{:+.2f}%",
         }),
         hide_index=True,
