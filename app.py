@@ -403,7 +403,7 @@ if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
                 fig.add_trace(_signal_trace(plot_df, "s3", "sell", "S3 卖出", "#d92d20", "triangle-down"))
             if signal_filter in ["全部", "S4"]:
                 fig.add_trace(_signal_trace(plot_df, "s4", "buy", "S4 买入", "#f79009", "circle"))
-                fig.add_trace(_signal_trace(plot_df, "s4", "sell", "#f79009", "triangle-down"))
+                fig.add_trace(_signal_trace(plot_df, "s4", "sell", "S4 卖出", "#f79009", "triangle-down"))
             if signal_filter in ["全部", "S3+S4"]:
                 fig.add_trace(_signal_trace(plot_df, "s3_s4", "buy", "S3+S4 买入", "#7a5af8", "circle"))
                 fig.add_trace(_signal_trace(plot_df, "s3_s4", "sell", "S3+S4 卖出", "#7a5af8", "triangle-down"))
