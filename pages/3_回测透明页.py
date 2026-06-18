@@ -31,12 +31,17 @@ transaction_cost_rate = payload.get("transaction_cost_rate", summary.get("单边
 FULLRISK_RESULTS_PATH = Path("data/backtest/top1_fullrisk_grid_300_results.csv")
 FULLRISK_TOP_PATH = Path("data/backtest/top1_fullrisk_grid_300_dedup_top.csv")
 FULLRISK_METADATA_PATH = Path("data/backtest/top1_fullrisk_grid_300_metadata.json")
+FULLRISK_COMPARE_PATH = Path("data/backtest/top1_fullrisk_grid_300_compare_report.json")
 fullrisk_results = pd.read_csv(FULLRISK_RESULTS_PATH) if FULLRISK_RESULTS_PATH.exists() else pd.DataFrame()
 fullrisk_top = pd.read_csv(FULLRISK_TOP_PATH) if FULLRISK_TOP_PATH.exists() else pd.DataFrame()
 try:
     fullrisk_meta = json.loads(FULLRISK_METADATA_PATH.read_text(encoding="utf-8")) if FULLRISK_METADATA_PATH.exists() else {}
 except Exception:
     fullrisk_meta = {}
+try:
+    fullrisk_compare = json.loads(FULLRISK_COMPARE_PATH.read_text(encoding="utf-8")) if FULLRISK_COMPARE_PATH.exists() else {}
+except Exception:
+    fullrisk_compare = {}
 
 
 def pct(value: object) -> str:
@@ -159,13 +164,42 @@ st.caption(
     "主策略：Top1 + 广度过滤（买入70% / 卖出35% / 综合分>=54 / 风险<45）"
 )
 if fullrisk_meta:
-    st.success(f"完整风险分表已由脚本每日可复算生成：{meta_generated} · {meta_method}")
+    st.success(f"完整风险分正式表 metadata：{meta_generated} · {meta_method}")
     checks = fullrisk_meta.get("strict_checks") or []
     if checks:
         st.caption("严格检查：" + "；".join(str(x) for x in checks))
 else:
-    st.warning("当前 300 日完整风险分表尚未由新脚本生成 metadata。下一次 GitHub Actions 成功运行后会写入生成时间、样本区间和严格检查说明。")
-st.warning("该主卡使用 300 日完整风险分表作为基准回测。当前版本按你的要求暂不加入 ETF 成本，因此主卡不展示成本后收益。")
+    st.warning("当前正式 300 日完整风险分表尚未由新脚本生成 metadata。正式表仍作为你认可的 baseline 使用。")
+
+if fullrisk_compare:
+    comparison = fullrisk_compare.get("comparison", {}) or {}
+    compare_status = comparison.get("status", fullrisk_compare.get("compare_status", "-"))
+    compare_message = comparison.get("message", "")
+    compare_generated = fullrisk_compare.get("generated_at", "-")
+    if compare_status == "match_within_tolerance":
+        st.success(f"影子对账：candidate 与正式表差异在容忍范围内 · {compare_generated}")
+    elif compare_status == "mismatch_requires_review":
+        st.error(f"影子对账：candidate 与正式表差异较大，暂不应 promote · {compare_generated}")
+    else:
+        st.warning(f"影子对账：{compare_status} · {compare_generated}")
+    if compare_message:
+        st.caption(compare_message)
+    diffs = comparison.get("metric_diffs", {}) or {}
+    if diffs:
+        diff_rows = []
+        for metric, values in diffs.items():
+            diff_rows.append({
+                "指标": metric,
+                "正式表": values.get("official"),
+                "candidate": values.get("candidate"),
+                "差异": values.get("diff"),
+            })
+        with st.expander("查看影子对账差异", expanded=False):
+            st.dataframe(pd.DataFrame(diff_rows), hide_index=True, width="stretch")
+else:
+    st.info("尚未生成影子对账报告。下一次 GitHub Actions 成功运行后会写入 candidate 表和 compare_report。")
+
+st.warning("该主卡使用 300 日完整风险分正式表作为基准回测。当前版本按你的要求暂不加入 ETF 成本，因此主卡不展示成本后收益。")
 
 if not fullrisk_top.empty:
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
