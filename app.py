@@ -118,7 +118,7 @@ main_col, side_col = st.columns([2.15, 1], gap="medium")
 with main_col:
     st.markdown('<div class="panel"><div class="section-title">综合排名</div>', unsafe_allow_html=True)
     show_cols = [
-        "板块名称", "数据日期", "信号", "涨跌幅", "综合博弈得分", "逃顶风险分", "入场共振分",
+        "板块名称", "涨跌幅", "综合博弈得分", "逃顶风险分", "入场共振分",
         "动态水位", "趋势加速度", "资金流向", "上涨占比", "对应ETF",
     ]
     show_cols = [c for c in show_cols if c in df.columns]
@@ -129,8 +129,6 @@ with main_col:
         width="stretch",
         column_config={
             "板块名称": st.column_config.TextColumn("板块", width="small"),
-            "数据日期": st.column_config.TextColumn("日期", width="small"),
-            "信号": st.column_config.TextColumn("信号", width="medium"),
             "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%+.2f%%"),
             "综合博弈得分": st.column_config.ProgressColumn("综合分", min_value=0, max_value=100, format="%.1f"),
             "逃顶风险分": st.column_config.ProgressColumn("风险", min_value=0, max_value=100, format="%.1f"),
@@ -405,7 +403,7 @@ if not avix_hist.empty and {"trade_date", "avix"}.issubset(avix_hist.columns):
                 fig.add_trace(_signal_trace(plot_df, "s3", "sell", "S3 卖出", "#d92d20", "triangle-down"))
             if signal_filter in ["全部", "S4"]:
                 fig.add_trace(_signal_trace(plot_df, "s4", "buy", "S4 买入", "#f79009", "circle"))
-                fig.add_trace(_signal_trace(plot_df, "s4", "sell", "S4 卖出", "#f79009", "triangle-down"))
+                fig.add_trace(_signal_trace(plot_df, "s4", "sell", "#f79009", "triangle-down"))
             if signal_filter in ["全部", "S3+S4"]:
                 fig.add_trace(_signal_trace(plot_df, "s3_s4", "buy", "S3+S4 买入", "#7a5af8", "circle"))
                 fig.add_trace(_signal_trace(plot_df, "s3_s4", "sell", "S3+S4 卖出", "#7a5af8", "triangle-down"))
