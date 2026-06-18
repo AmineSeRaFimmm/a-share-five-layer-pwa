@@ -15,12 +15,13 @@ inject_theme()
 
 page_header("模型回测", "300日完整风险分主策略回测", "Full-risk grid")
 
-BACKTEST_DIR = Path("data/backtest")
+DATA_DIR = Path("data")
+BACKTEST_DIR = DATA_DIR / "backtest"
 FULLRISK_RESULTS_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_results.csv"
 FULLRISK_PRIMARY_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_primary_path.csv"
 FULLRISK_STRATEGY_COMPARISON_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_strategy_comparison.csv"
 FULLRISK_WINDOW_ROBUSTNESS_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_window_robustness.csv"
-FULLRISK_RECENT_SIGNALS_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_recent_signals.csv"
+LIVE_RECOMMENDATION_HISTORY_PATH = DATA_DIR / "live_recommendation_history.csv"
 FULLRISK_METADATA_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_metadata.json"
 FULLRISK_COMPARE_PATH = BACKTEST_DIR / "top1_fullrisk_grid_300_compare_report.json"
 
@@ -30,7 +31,7 @@ NUMERIC_COLS = {
     "profit_factor", "最长连续亏损", "持仓占比", "组合数",
     "strategy_ret", "benchmark_ret", "hs300_ret", "strategy_nav", "benchmark_nav", "hs300_nav",
     "综合博弈得分", "逃顶风险分", "入场共振分", "市场广度", "trade_id",
-    "行业等权收益", "沪深300收益",
+    "行业等权收益", "沪深300收益", "涨跌幅", "规则买入广度", "规则卖出广度", "规则最低综合分", "规则最高风险分",
 }
 
 
@@ -95,7 +96,7 @@ def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _format_date_col(df: pd.DataFrame, col: str = "date") -> pd.DataFrame:
+def _format_date_col(df: pd.DataFrame, col: str) -> pd.DataFrame:
     out = df.copy()
     if col in out.columns:
         out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -106,7 +107,7 @@ fullrisk_results = _coerce_numeric(_read_csv(FULLRISK_RESULTS_PATH))
 primary_path = _coerce_numeric(_read_csv(FULLRISK_PRIMARY_PATH))
 strategy_cmp = _coerce_numeric(_read_csv(FULLRISK_STRATEGY_COMPARISON_PATH))
 window_robust = _coerce_numeric(_read_csv(FULLRISK_WINDOW_ROBUSTNESS_PATH))
-recent_signals = _coerce_numeric(_read_csv(FULLRISK_RECENT_SIGNALS_PATH))
+live_history = _coerce_numeric(_read_csv(LIVE_RECOMMENDATION_HISTORY_PATH))
 fullrisk_meta = _read_json(FULLRISK_METADATA_PATH)
 fullrisk_compare = _read_json(FULLRISK_COMPARE_PATH)
 
@@ -236,26 +237,30 @@ with right:
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-st.markdown('<div class="panel"><div class="section-title">最近信号</div>', unsafe_allow_html=True)
-if recent_signals.empty:
-    st.info("完整风险分最近信号文件尚未生成。下一次 GitHub Actions 成功运行后会生成。")
+st.markdown('<div class="panel"><div class="section-title">今日推荐历史账本</div>', unsafe_allow_html=True)
+if live_history.empty:
+    st.info("今日推荐历史账本尚未生成。下一次 GitHub Actions 成功运行后会生成 data/live_recommendation_history.csv。")
 else:
-    recent_show = _format_date_col(recent_signals, "date")
-    if "date" in recent_show.columns:
-        recent_show = recent_show.sort_values("date", ascending=False)
+    live_show = _format_date_col(live_history, "trade_date")
+    if "trade_date" in live_show.columns:
+        live_show = live_show.sort_values("trade_date", ascending=False)
+    show_cols = [
+        "trade_date", "推荐动作", "仓位动作", "动作前持仓", "动作后持仓", "信号板块",
+        "买入板块", "卖出板块", "市场广度", "综合博弈得分", "逃顶风险分", "入场共振分",
+        "涨跌幅", "对应ETF", "动作原因", "updated_at",
+    ]
     st.dataframe(
-        recent_show.style.format({
+        live_show[[c for c in show_cols if c in live_show.columns]].head(60).style.format({
+            "市场广度": "{:.1%}",
             "综合博弈得分": "{:.1f}",
             "逃顶风险分": "{:.1f}",
             "入场共振分": "{:.1f}",
-            "市场广度": "{:.1%}",
-            "strategy_ret": "{:+.2%}",
-            "benchmark_ret": "{:+.2%}",
-            "hs300_ret": "{:+.2%}",
+            "涨跌幅": "{:+.2f}%",
         }, na_rep="-"),
         hide_index=True,
         width="stretch",
     )
+    st.caption("该模块来自 data/live_recommendation_history.csv，按今日复盘实际生成的 buy/sell/hold/flat 推荐状态重建；不是事后回测路径。")
 st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
