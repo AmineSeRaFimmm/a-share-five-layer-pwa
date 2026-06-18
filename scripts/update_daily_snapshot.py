@@ -20,6 +20,11 @@ os.environ.setdefault("NO_PROXY", "*")
 os.environ.setdefault("SW_PROCESSED_CACHE_TTL_SECONDS", "0")
 
 from avix_utils import calculate_and_store_avix, load_avix_history, build_avix_s3_s4_signal_history  # noqa: E402
+from portfolio_backtest import (  # noqa: E402
+    ACCUMULATE_STRATEGY_LABEL,
+    build_top1_accumulate_backtest,
+    summarize_accumulate_backtest,
+)
 from production_backtest import (  # noqa: E402
     BUY_BREADTH_FLOOR,
     MAX_RISK,
@@ -285,14 +290,22 @@ def _refresh_avix_payload(skip_avix: bool = False) -> dict:
     return _avix_payload_from_history(latest, avix_hist)
 
 
-def _comparison_row(label: str, bt: pd.DataFrame) -> dict | None:
-    summary = summarize_backtest(bt)
+def _comparison_row(label: str, bt: pd.DataFrame, summary_func=summarize_backtest) -> dict | None:
+    summary = summary_func(bt)
     if not summary:
         return None
     return {
         "策略": label,
         "方向胜率": summary["胜率"],
         "相对胜率": summary["相对胜率"],
+        "持仓日胜率": summary.get("持仓日胜率", 0.0),
+        "交易胜率": summary.get("交易胜率", 0.0),
+        "平均盈利": summary.get("平均盈利", 0.0),
+        "平均亏损": summary.get("平均亏损", 0.0),
+        "盈亏比": summary.get("盈亏比", 0.0),
+        "持仓暴露率": summary.get("持仓暴露率", 0.0),
+        "交易次数": summary.get("交易次数", 0.0),
+        "成本后收益": summary.get("成本后收益", summary.get("累计收益", 0.0)),
         "累计收益": summary["累计收益"],
         "等权基准": summary["基准收益"],
         "年化收益": summary["年化收益"],
@@ -314,10 +327,16 @@ def _build_backtest_payload(lookback_days: int = 360) -> dict:
         if bt.empty or not summary:
             return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "empty", "error": "Top1+广度过滤回测结果为空"}
 
+        accumulate_bt = build_top1_accumulate_backtest(scored, lookback_days)
+        accumulate_summary = summarize_accumulate_backtest(accumulate_bt)
+
         rows = []
         primary_row = _comparison_row(PRIMARY_STRATEGY_LABEL, bt)
         if primary_row:
             rows.append(primary_row)
+        accumulate_row = _comparison_row(ACCUMULATE_STRATEGY_LABEL, accumulate_bt, summarize_accumulate_backtest)
+        if accumulate_row:
+            rows.append(accumulate_row)
         for strategy, label in {
             "top1": "Top1 单押",
             "top3_balanced": "Top3 稳健等权",
@@ -367,16 +386,19 @@ def _build_backtest_payload(lookback_days: int = 360) -> dict:
             "status": "ready",
             "primary_strategy": PRIMARY_STRATEGY_KEY,
             "primary_strategy_label": PRIMARY_STRATEGY_LABEL,
+            "alternative_strategy_label": ACCUMULATE_STRATEGY_LABEL,
             "strategy_rules": {
                 "buy_breadth_floor": BUY_BREADTH_FLOOR,
                 "sell_breadth_floor": SELL_BREADTH_FLOOR,
                 "min_score": MIN_SCORE,
                 "max_risk": MAX_RISK,
                 "selection": "Top1 by 综合博弈得分",
+                "alternative": "Top1新信号加入组合；旧仓不主动卖出；广度跌破卖出线时全清；组合等权且不加杠杆",
             },
             "score_basis": PRODUCTION_SCORE_VERSION,
             "score_basis_note": "回测综合分按当前生产六层权重并纳入市场广度 regime_factor；历史缺少实时成分股快照，micro_factor 按生产缺省口径取 1.0。",
             "summary": summary,
+            "alternative_summary": accumulate_summary,
             "recent_curve": curve.to_dict(orient="records"),
             "strategy_comparison": cmp_df.to_dict(orient="records") if not cmp_df.empty else [],
             "window_robustness": robust_df.to_dict(orient="records") if not robust_df.empty else [],
