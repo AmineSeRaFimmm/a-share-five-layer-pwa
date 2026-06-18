@@ -74,22 +74,33 @@ def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return res
 
 
-def _state_has_no_active_holding() -> bool:
+def _sanitize_snapshot_sell_rows(payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload:
+        return payload
+    clarity = dict(payload.get("clarity_signal") or {})
+    sell_rows = clarity.get("sell") or []
+    if not sell_rows:
+        return payload
+
     state = _load_json_file(RECOMMENDATION_STATE_FILE)
     if not state:
-        return False
+        return payload
+
     holdings = state.get("holdings") or []
     if holdings:
-        return False
-    position_state = str(state.get("position_state", "")).lower()
-    return position_state in {"", "flat"} or bool(state.get("last_sell_trade_date"))
-
-
-def _sanitize_snapshot_sell_rows(payload: dict[str, Any]) -> dict[str, Any]:
-    if not payload or not _state_has_no_active_holding():
         return payload
+
+    payload_trade_date = str(payload.get("trade_date", ""))[:10]
+    state_sell_date = str(state.get("last_sell_trade_date", ""))[:10]
+    last_action = str(state.get("last_action", "")).lower()
+    state_last_sell = state.get("last_sell") or []
+
+    # A same-day sell generated from a real previous holding is valid and should be visible.
+    if last_action == "sell" and state_sell_date == payload_trade_date and state_last_sell:
+        return payload
+
+    # Otherwise the sell rows are stale display residue from a prior state or duplicate run.
     out = dict(payload)
-    clarity = dict(out.get("clarity_signal") or {})
     clarity["sell"] = []
     out["clarity_signal"] = clarity
     return out
@@ -143,6 +154,13 @@ def _refresh_snapshot_avix_from_cache(payload: dict[str, Any]) -> dict[str, Any]
         signal_hist = signal_hist.copy()
         signal_hist["trade_date"] = signal_hist["trade_date"].dt.strftime("%Y-%m-%d")
         avix_payload["signal_history"] = signal_hist.to_dict(orient="records")
+        signal_latest = pd.to_datetime(signal_hist["trade_date"], errors="coerce").max()
+        index_latest = pd.to_datetime(hist_out["trade_date"], errors="coerce").max()
+        if pd.notna(index_latest) and pd.notna(signal_latest) and signal_latest < index_latest:
+            avix_payload["signal_note"] = (
+                f"AVIX 指数已到 {index_latest.strftime('%Y-%m-%d')}；"
+                f"S3/S4 信号因上证指数源滞后暂到 {signal_latest.strftime('%Y-%m-%d')}。"
+            )
 
     avix_payload["latest"] = latest
     avix_payload["history"] = hist_out.to_dict(orient="records")
