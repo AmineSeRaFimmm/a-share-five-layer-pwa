@@ -154,12 +154,14 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
         breadth = float((day["涨跌幅"] > 0).mean())
         bench_ret = float(day["next_ret"].mean())
         action = "flat"
+        display_position = ""
         selected = pd.DataFrame()
 
         if breadth < SELL_BREADTH_FLOOR:
-            had_position = bool(current_position)
+            sold_position = current_position
             current_position = ""
-            action = "sell" if had_position else "flat"
+            action = "sell" if sold_position else "flat"
+            display_position = sold_position
         else:
             if breadth >= BUY_BREADTH_FLOOR:
                 candidate = (
@@ -178,7 +180,7 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
 
         if selected.empty:
             strategy_ret = 0.0
-            names = "空仓"
+            names = display_position or "空仓"
             top_score = 0.0
             risk = 0.0
         else:
