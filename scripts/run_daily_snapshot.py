@@ -100,20 +100,63 @@ def _write_recommendation_state(
     holdings: pd.DataFrame,
     breadth_ratio: float,
     last_sell: pd.DataFrame | None = None,
+    action: str = "hold",
 ) -> None:
+    previous_state = uds._read_json(uds.RECOMMENDATION_STATE_FILE)
     rows = holdings.to_dict(orient="records") if not holdings.empty else []
     sell_rows = last_sell.to_dict(orient="records") if last_sell is not None and not last_sell.empty else []
+    trade_date = target_date.strftime("%Y-%m-%d")
+    prior_buy_date = previous_state.get("last_buy_trade_date", "") if isinstance(previous_state, dict) else ""
+    prior_sell_date = previous_state.get("last_sell_trade_date", "") if isinstance(previous_state, dict) else ""
     uds._write_json(uds.RECOMMENDATION_STATE_FILE, {
-        "as_of_trade_date": target_date.strftime("%Y-%m-%d"),
+        "as_of_trade_date": trade_date,
         "updated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
         "market_breadth": breadth_ratio,
         "position_state": "holding" if rows else "flat",
-        "last_action": "sell" if sell_rows else ("buy" if rows else "hold_flat"),
+        "last_action": action,
         "holdings": rows,
-        "last_buy_trade_date": target_date.strftime("%Y-%m-%d") if rows else "",
-        "last_sell_trade_date": target_date.strftime("%Y-%m-%d") if sell_rows else "",
-        "last_sell": sell_rows,
+        "last_buy_trade_date": trade_date if action == "buy" else prior_buy_date,
+        "last_sell_trade_date": trade_date if action == "sell" else prior_sell_date,
+        "last_sell": sell_rows if action == "sell" else (previous_state.get("last_sell", []) if isinstance(previous_state, dict) else []),
     })
+
+
+def _build_recommendations(df: pd.DataFrame, history_file: Path, target_date: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
+    breadth_ratio = float((df["涨跌幅"] > 0).mean())
+    today_buy = pd.DataFrame()
+    if breadth_ratio >= uds.BUY_BREADTH_FLOOR:
+        today_buy = (
+            df[(df["综合博弈得分"] >= uds.MIN_SCORE) & (df["逃顶风险分"] < uds.MAX_RISK)]
+            .sort_values("综合博弈得分", ascending=False)
+            .head(1)
+            .copy()
+        )
+
+    previous_hold = _load_recommendation_holding(target_date, history_file)
+    sell_rows = []
+    if breadth_ratio < uds.SELL_BREADTH_FLOOR:
+        if previous_hold.empty:
+            state = uds._read_json(uds.RECOMMENDATION_STATE_FILE)
+            if state.get("last_sell_trade_date") == target_date.strftime("%Y-%m-%d"):
+                sell_rows = state.get("last_sell", []) or []
+        else:
+            for _, hold in previous_hold.iterrows():
+                name = str(hold.get("板块名称", ""))
+                if not name:
+                    continue
+                match = df[df["板块名称"].astype(str) == name]
+                item = match.iloc[0].to_dict() if not match.empty else {"板块名称": name}
+                item["卖出原因"] = f"市场广度 < {uds.SELL_BREADTH_FLOOR:.0%}"
+                if "对应ETF" not in item or not item.get("对应ETF"):
+                    item["对应ETF"] = hold.get("对应ETF", "")
+                sell_rows.append(item)
+        today_sell = pd.DataFrame(sell_rows)
+        _write_recommendation_state(target_date, pd.DataFrame(), breadth_ratio, today_sell, action="sell" if sell_rows else "flat")
+    elif not today_buy.empty:
+        _write_recommendation_state(target_date, today_buy, breadth_ratio, action="buy")
+    else:
+        _write_recommendation_state(target_date, previous_hold, breadth_ratio, action="hold" if not previous_hold.empty else "flat")
+    return today_buy, pd.DataFrame(sell_rows)
 
 
 def main() -> int:
@@ -121,6 +164,7 @@ def main() -> int:
     uds._recover_previous_recommendation = _recover_previous_recommendation
     uds._load_recommendation_holding = _load_recommendation_holding
     uds._write_recommendation_state = _write_recommendation_state
+    uds._build_recommendations = _build_recommendations
     return uds.main()
 
 
