@@ -41,9 +41,9 @@ jobs:
       - name: Update snapshot
         run: |
           if [ -n "${{ inputs.target_date }}" ]; then
-            python scripts/update_daily_snapshot.py --target-date "${{ inputs.target_date }}" --force
+            python scripts/run_daily_snapshot.py --target-date "${{ inputs.target_date }}" --force
           else
-            python scripts/update_daily_snapshot.py
+            python scripts/run_daily_snapshot.py
           fi
 
       - name: Commit data changes
