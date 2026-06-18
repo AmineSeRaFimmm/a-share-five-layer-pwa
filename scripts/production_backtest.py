@@ -14,7 +14,7 @@ BUY_BREADTH_FLOOR = 0.60
 SELL_BREADTH_FLOOR = 0.45
 MIN_SCORE = 58.0
 MAX_RISK = 55.0
-TRANSACTION_COST_RATE = 0.001
+TRANSACTION_COST_RATE = 0.0001
 RAW_COLS = ["trend_raw", "fund_raw", "abnormal_raw", "trap_raw", "efficiency_raw", "mid_confirm_raw"]
 
 
