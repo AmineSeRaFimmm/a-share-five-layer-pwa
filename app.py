@@ -117,19 +117,20 @@ main_col, side_col = st.columns([2.15, 1], gap="medium")
 
 with main_col:
     st.markdown('<div class="panel"><div class="section-title">综合排名</div>', unsafe_allow_html=True)
-    ranking_df = df.sort_values("综合博弈得分", ascending=False).copy() if "综合博弈得分" in df.columns else df.copy()
     show_cols = [
-        "板块名称", "涨跌幅", "综合博弈得分", "逃顶风险分", "入场共振分",
+        "板块名称", "数据日期", "信号", "涨跌幅", "综合博弈得分", "逃顶风险分", "入场共振分",
         "动态水位", "趋势加速度", "资金流向", "上涨占比", "对应ETF",
     ]
-    show_cols = [c for c in show_cols if c in ranking_df.columns]
+    show_cols = [c for c in show_cols if c in df.columns]
     st.dataframe(
-        ranking_df[show_cols],
+        df[show_cols],
         height=620,
         hide_index=True,
         width="stretch",
         column_config={
             "板块名称": st.column_config.TextColumn("板块", width="small"),
+            "数据日期": st.column_config.TextColumn("日期", width="small"),
+            "信号": st.column_config.TextColumn("信号", width="medium"),
             "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%+.2f%%"),
             "综合博弈得分": st.column_config.ProgressColumn("综合分", min_value=0, max_value=100, format="%.1f"),
             "逃顶风险分": st.column_config.ProgressColumn("风险", min_value=0, max_value=100, format="%.1f"),
@@ -189,15 +190,15 @@ clarity = snapshot.get("clarity_signal", {}) or {}
 rules = clarity.get("rules", {}) or {}
 today_buy = records_to_df(clarity.get("buy", []))
 today_sell = records_to_df(clarity.get("sell", []))
-buy_floor = float(rules.get("buy_breadth_floor", 0.60)) * 100
-sell_floor = float(rules.get("sell_breadth_floor", 0.45)) * 100
-min_score = float(rules.get("min_score", 58.0))
-max_risk = float(rules.get("max_risk", 55.0))
+buy_floor = float(rules.get("buy_breadth_floor", 0.70)) * 100
+sell_floor = float(rules.get("sell_breadth_floor", 0.35)) * 100
+min_score = float(rules.get("min_score", 54.0))
+max_risk = float(rules.get("max_risk", 45.0))
 
 st.markdown(
     f"""
 <div class="metric-grid">
-  {metric_card("策略", "澄势精选", "Top1 动量")}
+  {metric_card("策略", "澄势精选", "Top1 + 广度过滤")}
   {metric_card("今日广度", f"{breadth:.1f}%", "买入通过" if breadth >= buy_floor else "买入未通过")}
   {metric_card("买入候选", f"{len(today_buy)}", f"综合分 >= {min_score:.0f} · 风险 < {max_risk:.0f}")}
   {metric_card("卖出触发", f"{len(today_sell)}", f"广度 < {sell_floor:.0f}%")}

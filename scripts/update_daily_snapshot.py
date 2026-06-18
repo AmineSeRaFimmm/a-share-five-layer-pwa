@@ -20,28 +20,15 @@ os.environ.setdefault("NO_PROXY", "*")
 os.environ.setdefault("SW_PROCESSED_CACHE_TTL_SECONDS", "0")
 
 from avix_utils import calculate_and_store_avix, load_avix_history, build_avix_s3_s4_signal_history  # noqa: E402
-from portfolio_backtest import (  # noqa: E402
-    ACCUMULATE_STRATEGY_LABEL,
-    build_top1_accumulate_backtest,
-    summarize_accumulate_backtest,
-)
-from production_backtest import (  # noqa: E402
-    BUY_BREADTH_FLOOR,
-    MAX_RISK,
-    MIN_SCORE,
-    PRIMARY_STRATEGY_KEY,
-    PRIMARY_STRATEGY_LABEL,
-    PRODUCTION_SCORE_VERSION,
-    SELL_BREADTH_FLOOR,
-    build_reference_backtest,
-    build_top1_breadth_backtest,
-    build_walk_forward_scores,
-    summarize_backtest,
-)
-from status_guard import build_status  # noqa: E402
 from ui_theme import clean_signal  # noqa: E402
-from update_runtime_guard import install as install_runtime_guard  # noqa: E402
-from utils import fetch_historical_baselines, get_processed_sw_data  # noqa: E402
+from utils import (  # noqa: E402
+    SW_CODE_MAPPING,
+    fetch_historical_baselines,
+    get_processed_sw_data,
+    _build_strategy_backtest,
+    _build_walk_forward_scores,
+    _summarize_backtest,
+)
 
 DATA_DIR = ROOT / "data"
 LATEST_FILE = DATA_DIR / "latest_snapshot.json"
@@ -53,7 +40,11 @@ BACKTEST_DIR = DATA_DIR / "backtest"
 RECOMMENDATION_STATE_FILE = DATA_DIR / "recommendation_state.json"
 
 SAMPLE_SECTORS = ["银行", "电子", "煤炭", "基础化工", "机械设备", "食品饮料", "医药生物", "电力设备"]
-AFTER_CLOSE_TIME = dt_time(19, 0)
+
+BUY_BREADTH_FLOOR = 0.70
+SELL_BREADTH_FLOOR = 0.35
+MIN_SCORE = 54.0
+MAX_RISK = 45.0
 
 
 def _json_default(value):
@@ -99,18 +90,27 @@ def _is_trade_day(day: pd.Timestamp, calendar: pd.Series) -> bool:
 
 
 def _target_trade_date(now: datetime, calendar: pd.Series) -> tuple[pd.Timestamp | None, str]:
-    today = pd.Timestamp(now.date()).normalize()
-    today_is_trade_day = _is_trade_day(today, calendar)
-    if today_is_trade_day and now.time() >= AFTER_CLOSE_TIME:
-        return today, "after_close"
-    eligible = calendar[calendar < today] if today_is_trade_day else calendar[calendar <= today]
+    today = pd.Timestamp(now.date())
+    if dt_time(18, 0) <= now.time() <= dt_time(23, 59):
+        if not _is_trade_day(today, calendar):
+            return None, "今天不是 A 股交易日"
+        return today, "evening"
+
+    eligible = calendar[calendar <= today]
     if eligible.empty:
         return None, "交易日历为空"
-    return pd.Timestamp(eligible.iloc[-1]).normalize(), "last_completed_trade_day"
+    return pd.Timestamp(eligible.iloc[-1]).normalize(), "morning_or_manual"
 
 
 def _status(target: str | None, status: str, reason: str, latest_source_dates: dict | None = None) -> dict:
-    return build_status(_read_json, LATEST_FILE, target, status, reason, latest_source_dates)
+    return {
+        "target_date": target,
+        "target_trade_date": target,
+        "last_attempt_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
+        "status": status,
+        "reason": reason,
+        "latest_source_dates": latest_source_dates or {},
+    }
 
 
 def _validate_ready_dates(target_date: pd.Timestamp) -> tuple[bool, dict[str, str]]:
@@ -166,17 +166,65 @@ def _state_rows_to_frame(rows: list[dict]) -> pd.DataFrame:
     return out
 
 
+def _recover_previous_recommendation(target_date: pd.Timestamp, history_file: Path) -> pd.DataFrame:
+    prior_rows: list[dict] = []
+    for path in sorted(HISTORY_DIR.glob("snapshot_*.json")):
+        try:
+            payload = _read_json(path)
+            trade_date = pd.Timestamp(payload.get("trade_date")).normalize()
+        except Exception:
+            continue
+        if trade_date >= target_date:
+            continue
+        buys = ((payload.get("clarity_signal") or {}).get("buy") or [])
+        if buys:
+            prior_rows = buys
+
+    if prior_rows:
+        return _state_rows_to_frame(prior_rows)
+
+    if not history_file.exists():
+        return pd.DataFrame()
+    try:
+        hist = pd.read_csv(history_file)
+    except Exception:
+        return pd.DataFrame()
+    required = {"snapshot_time", "板块名称", "涨跌幅", "综合博弈得分", "逃顶风险分"}
+    if hist.empty or not required.issubset(hist.columns):
+        return pd.DataFrame()
+    hist = hist.copy()
+    if "数据日期" in hist.columns:
+        hist["_trade_date"] = pd.to_datetime(hist["数据日期"].astype(str).str[:10], errors="coerce")
+        hist = hist[hist["_trade_date"].dt.normalize() < target_date]
+    hist["slot"] = hist["snapshot_time"].astype(str).str[:16]
+    recovered = pd.DataFrame()
+    for slot in sorted(hist["slot"].dropna().unique().tolist()):
+        prev = hist[hist["slot"] == slot].copy()
+        prev_breadth = float((pd.to_numeric(prev["涨跌幅"], errors="coerce") > 0).mean())
+        if prev_breadth < BUY_BREADTH_FLOOR:
+            continue
+        cand = (
+            prev[
+                (pd.to_numeric(prev["综合博弈得分"], errors="coerce") >= MIN_SCORE)
+                & (pd.to_numeric(prev["逃顶风险分"], errors="coerce") < MAX_RISK)
+            ]
+            .sort_values("综合博弈得分", ascending=False)
+            .head(1)
+            .copy()
+        )
+        if not cand.empty:
+            recovered = cand
+    return recovered
+
+
 def _load_recommendation_holding(target_date: pd.Timestamp, history_file: Path) -> pd.DataFrame:
     state = _read_json(RECOMMENDATION_STATE_FILE)
-    if isinstance(state, dict) and state:
-        if state.get("last_sell_trade_date") == target_date.strftime("%Y-%m-%d"):
-            return pd.DataFrame()
-        holdings = state.get("holdings", [])
-        if holdings:
-            return _state_rows_to_frame(holdings)
-        if state.get("as_of_trade_date"):
-            return pd.DataFrame()
-    return pd.DataFrame()
+    if isinstance(state, dict) and state.get("last_sell_trade_date") == target_date.strftime("%Y-%m-%d"):
+        return pd.DataFrame()
+    holdings = state.get("holdings", []) if isinstance(state, dict) else []
+    if holdings:
+        return _state_rows_to_frame(holdings)
+    return _recover_previous_recommendation(target_date, history_file)
 
 
 def _write_recommendation_state(
@@ -184,24 +232,16 @@ def _write_recommendation_state(
     holdings: pd.DataFrame,
     breadth_ratio: float,
     last_sell: pd.DataFrame | None = None,
-    action: str = "hold",
 ) -> None:
-    previous_state = _read_json(RECOMMENDATION_STATE_FILE)
     rows = holdings.to_dict(orient="records") if not holdings.empty else []
     sell_rows = last_sell.to_dict(orient="records") if last_sell is not None and not last_sell.empty else []
-    trade_date = target_date.strftime("%Y-%m-%d")
-    prior_buy_date = previous_state.get("last_buy_trade_date", "") if isinstance(previous_state, dict) else ""
-    prior_sell_date = previous_state.get("last_sell_trade_date", "") if isinstance(previous_state, dict) else ""
     _write_json(RECOMMENDATION_STATE_FILE, {
-        "as_of_trade_date": trade_date,
+        "as_of_trade_date": target_date.strftime("%Y-%m-%d"),
         "updated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
         "market_breadth": breadth_ratio,
-        "position_state": "holding" if rows else "flat",
-        "last_action": action,
         "holdings": rows,
-        "last_buy_trade_date": trade_date if action == "buy" else prior_buy_date,
-        "last_sell_trade_date": trade_date if action == "sell" else prior_sell_date,
-        "last_sell": sell_rows if action == "sell" else [],
+        "last_sell_trade_date": target_date.strftime("%Y-%m-%d") if sell_rows else "",
+        "last_sell": sell_rows,
     })
 
 
@@ -215,10 +255,15 @@ def _build_recommendations(df: pd.DataFrame, history_file: Path, target_date: pd
             .head(1)
             .copy()
         )
+
     previous_hold = _load_recommendation_holding(target_date, history_file)
     sell_rows = []
     if breadth_ratio < SELL_BREADTH_FLOOR:
-        if not previous_hold.empty:
+        if previous_hold.empty:
+            state = _read_json(RECOMMENDATION_STATE_FILE)
+            if state.get("last_sell_trade_date") == target_date.strftime("%Y-%m-%d"):
+                sell_rows = state.get("last_sell", []) or []
+        else:
             for _, hold in previous_hold.iterrows():
                 name = str(hold.get("板块名称", ""))
                 if not name:
@@ -230,11 +275,11 @@ def _build_recommendations(df: pd.DataFrame, history_file: Path, target_date: pd
                     item["对应ETF"] = hold.get("对应ETF", "")
                 sell_rows.append(item)
         today_sell = pd.DataFrame(sell_rows)
-        _write_recommendation_state(target_date, pd.DataFrame(), breadth_ratio, today_sell, action="sell" if sell_rows else "flat")
+        _write_recommendation_state(target_date, pd.DataFrame(), breadth_ratio, today_sell)
     elif not today_buy.empty:
-        _write_recommendation_state(target_date, today_buy, breadth_ratio, action="buy")
+        _write_recommendation_state(target_date, today_buy, breadth_ratio)
     else:
-        _write_recommendation_state(target_date, previous_hold, breadth_ratio, action="hold" if not previous_hold.empty else "flat")
+        _write_recommendation_state(target_date, previous_hold, breadth_ratio)
     return today_buy, pd.DataFrame(sell_rows)
 
 
@@ -250,6 +295,7 @@ def _load_cached_avix() -> tuple[dict, pd.DataFrame]:
             return latest, df
     except Exception:
         pass
+
     for path in [DATA_DIR / "avix_300_close_mid.csv", DATA_DIR / "avix_300_hist_clean.csv"]:
         if not path.exists():
             continue
@@ -285,72 +331,56 @@ def _refresh_avix_payload(skip_avix: bool = False) -> dict:
         payload = _avix_payload_from_history(latest, avix_hist)
         payload["note"] = "本次跳过 AVIX 实时刷新，使用历史缓存"
         return payload
+
     latest = calculate_and_store_avix()
     avix_hist = load_avix_history()
     return _avix_payload_from_history(latest, avix_hist)
 
 
-def _comparison_row(label: str, bt: pd.DataFrame, summary_func=summarize_backtest) -> dict | None:
-    summary = summary_func(bt)
-    if not summary:
-        return None
-    return {
-        "策略": label,
-        "方向胜率": summary["胜率"],
-        "相对胜率": summary["相对胜率"],
-        "持仓日胜率": summary.get("持仓日胜率", 0.0),
-        "交易胜率": summary.get("交易胜率", 0.0),
-        "平均盈利": summary.get("平均盈利", 0.0),
-        "平均亏损": summary.get("平均亏损", 0.0),
-        "盈亏比": summary.get("盈亏比", 0.0),
-        "持仓暴露率": summary.get("持仓暴露率", 0.0),
-        "交易次数": summary.get("交易次数", 0.0),
-        "成本后收益": summary.get("成本后收益", summary.get("累计收益", 0.0)),
-        "累计收益": summary["累计收益"],
-        "等权基准": summary["基准收益"],
-        "年化收益": summary["年化收益"],
-        "最大回撤": summary["最大回撤"],
-        "夏普比率": summary["夏普比率"],
-        "交易日数": summary["交易日数"],
-    }
-
-
 def _build_backtest_payload(lookback_days: int = 360) -> dict:
     generated_at = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        scored = build_walk_forward_scores(520)
+        scored = _build_walk_forward_scores(520)
         if scored.empty:
-            return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "empty", "error": "生产口径滚动评分结果为空"}
+            return {
+                "generated_at": generated_at,
+                "lookback_days": lookback_days,
+                "status": "empty",
+                "error": "滚动评分结果为空",
+            }
 
-        bt = build_top1_breadth_backtest(scored, lookback_days)
-        summary = summarize_backtest(bt)
-        if bt.empty or not summary:
-            return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "empty", "error": "Top1+广度过滤回测结果为空"}
-
-        accumulate_bt = build_top1_accumulate_backtest(scored, lookback_days)
-        accumulate_summary = summarize_accumulate_backtest(accumulate_bt)
+        bt = _build_strategy_backtest(scored, lookback_days, "top1_breadth_final")
+        summary = _summarize_backtest(bt)
 
         rows = []
-        primary_row = _comparison_row(PRIMARY_STRATEGY_LABEL, bt)
-        if primary_row:
-            rows.append(primary_row)
-        accumulate_row = _comparison_row(ACCUMULATE_STRATEGY_LABEL, accumulate_bt, summarize_accumulate_backtest)
-        if accumulate_row:
-            rows.append(accumulate_row)
-        for strategy, label in {
+        strategy_names = {
+            "top1_breadth_final": "Top1 + 广度过滤（70/35/54/45）",
             "top1": "Top1 单押",
             "top3_balanced": "Top3 稳健等权",
-            "top3_regime": "Top3 + 弱广度过滤",
-        }.items():
-            ref_row = _comparison_row(label, build_reference_backtest(scored, lookback_days, strategy))
-            if ref_row:
-                rows.append(ref_row)
+            "top3_regime": "Top3 + 广度过滤",
+        }
+        for strategy, label in strategy_names.items():
+            s_bt = _build_strategy_backtest(scored, lookback_days, strategy)
+            s_summary = _summarize_backtest(s_bt)
+            if not s_summary:
+                continue
+            rows.append({
+                "策略": label,
+                "方向胜率": s_summary["胜率"],
+                "相对胜率": s_summary["相对胜率"],
+                "累计收益": s_summary["累计收益"],
+                "等权基准": s_summary["基准收益"],
+                "年化收益": s_summary["年化收益"],
+                "最大回撤": s_summary["最大回撤"],
+                "夏普比率": s_summary["夏普比率"],
+                "交易日数": s_summary["交易日数"],
+            })
         cmp_df = pd.DataFrame(rows)
 
         robust_rows = []
         for window in (120, 240, 360, 520):
-            w_bt = build_top1_breadth_backtest(scored, int(window))
-            w_summary = summarize_backtest(w_bt)
+            w_bt = _build_strategy_backtest(scored, int(window), "top1_breadth_final")
+            w_summary = _summarize_backtest(w_bt)
             if not w_summary:
                 continue
             robust_rows.append({
@@ -365,47 +395,53 @@ def _build_backtest_payload(lookback_days: int = 360) -> dict:
             })
         robust_df = pd.DataFrame(robust_rows)
 
+        if bt.empty or not summary:
+            return {
+                "generated_at": generated_at,
+                "lookback_days": lookback_days,
+                "status": "empty",
+                "error": "回测结果为空",
+            }
+
         recent = bt.tail(30).copy()
         if "date" in recent.columns:
-            recent["date"] = pd.to_datetime(recent["date"], errors="coerce")
+            recent["date"] = pd.to_datetime(recent["date"], errors="coerce").dt.strftime("%Y-%m-%d")
         if "strategy_ret" in recent.columns:
             recent["模型次日收益"] = pd.to_numeric(recent["strategy_ret"], errors="coerce") * 100
         if "benchmark_ret" in recent.columns:
             recent["等权次日收益"] = pd.to_numeric(recent["benchmark_ret"], errors="coerce") * 100
-        recent = recent.sort_values("date", ascending=False)
-        recent["date"] = recent["date"].dt.strftime("%Y-%m-%d")
 
         curve_cols = [c for c in ["date", "strategy_nav", "benchmark_nav"] if c in bt.columns]
         curve = bt[curve_cols].tail(260).copy()
         if "date" in curve.columns:
             curve["date"] = pd.to_datetime(curve["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        signal_cols = ["date", "动作", "持有板块", "综合博弈得分", "风险简分", "市场广度", "模型次日收益", "等权次日收益"]
+
+        signal_cols = [
+            "date",
+            "持有板块",
+            "综合博弈得分",
+            "风险分",
+            "风险简分",
+            "模型次日收益",
+            "等权次日收益",
+        ]
         return {
             "generated_at": generated_at,
             "lookback_days": lookback_days,
             "status": "ready",
-            "primary_strategy": PRIMARY_STRATEGY_KEY,
-            "primary_strategy_label": PRIMARY_STRATEGY_LABEL,
-            "alternative_strategy_label": ACCUMULATE_STRATEGY_LABEL,
-            "strategy_rules": {
-                "buy_breadth_floor": BUY_BREADTH_FLOOR,
-                "sell_breadth_floor": SELL_BREADTH_FLOOR,
-                "min_score": MIN_SCORE,
-                "max_risk": MAX_RISK,
-                "selection": "Top1 by 综合博弈得分",
-                "alternative": "Top1新信号加入组合；旧仓不主动卖出；广度跌破卖出线时全清；组合等权且不加杠杆",
-            },
-            "score_basis": PRODUCTION_SCORE_VERSION,
-            "score_basis_note": "回测综合分按当前生产六层权重并纳入市场广度 regime_factor；历史缺少实时成分股快照，micro_factor 按生产缺省口径取 1.0。",
             "summary": summary,
-            "alternative_summary": accumulate_summary,
             "recent_curve": curve.to_dict(orient="records"),
             "strategy_comparison": cmp_df.to_dict(orient="records") if not cmp_df.empty else [],
             "window_robustness": robust_df.to_dict(orient="records") if not robust_df.empty else [],
             "recent_signals": recent[[c for c in signal_cols if c in recent.columns]].to_dict(orient="records"),
         }
     except Exception as exc:
-        return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "error", "error": str(exc)}
+        return {
+            "generated_at": generated_at,
+            "lookback_days": lookback_days,
+            "status": "error",
+            "error": str(exc),
+        }
 
 
 def _latest_strategy_payload(signal_history: list[dict], strategy: str) -> dict:
@@ -420,28 +456,44 @@ def _latest_strategy_payload(signal_history: list[dict], strategy: str) -> dict:
     buy_col = f"{strategy}_buy"
     sell_col = f"{strategy}_sell"
     sell_reason_col = f"{strategy}_sell_reason"
-    cols = ["trade_date", "execution_trade_date", "execution_sse_open", "avix", "sse_open", "sse_close", "sse_ret1", "sse_ret10", "sse_ma5", f"{strategy}_signal", buy_col, sell_col, sell_reason_col]
+    cols = [
+        "trade_date", "execution_trade_date", "execution_sse_open", "avix",
+        "sse_open", "sse_close", "sse_ret1", "sse_ret10", "sse_ma5",
+        f"{strategy}_signal", buy_col, sell_col, sell_reason_col,
+    ]
     cols = [c for c in cols if c in df.columns]
     latest = df.iloc[-1][cols].to_dict() if cols else df.iloc[-1].to_dict()
     recent_buy = df[df[buy_col].astype(bool)].tail(20)[cols].to_dict(orient="records") if buy_col in df.columns else []
     recent_sell = df[df[sell_col].astype(bool)].tail(20)[cols].to_dict(orient="records") if sell_col in df.columns else []
-    return {"latest": latest, "recent_buy": recent_buy, "recent_sell": recent_sell}
+    return {
+        "latest": latest,
+        "recent_buy": recent_buy,
+        "recent_sell": recent_sell,
+    }
 
 
 def _snapshot_payload(df: pd.DataFrame, target_date: pd.Timestamp, skip_avix: bool = False) -> dict:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     df = df.copy()
-    df["信号"] = df["终极信号"].map(clean_signal) if "终极信号" in df.columns else "未分类"
+    if "终极信号" in df.columns:
+        df["信号"] = df["终极信号"].map(clean_signal)
+    else:
+        df["信号"] = "未分类"
+
     breadth_pct = float((df["涨跌幅"] > 0).mean() * 100)
     risk_pool = df[df["信号"].str.contains("强制清仓|崩盘|鱼尾|诱多|强弩|战术减仓", na=False)]
     opp_pool = df[df["信号"].str.contains("满仓|底仓|顺势", na=False)]
     today_buy, today_sell = _build_recommendations(df, DATA_DIR / "sw_board_history.csv", target_date)
+
     avix_payload = _refresh_avix_payload(skip_avix=skip_avix)
     AVIX_DIR.mkdir(parents=True, exist_ok=True)
     avix_history = avix_payload.get("history", []) or []
     if avix_history:
         pd.DataFrame(avix_history).to_csv(AVIX_DIR / "avix_history.csv", index=False)
+
     signal_history = avix_payload.get("signal_history", []) or []
+
+    sectors = df.to_dict(orient="records")
     return {
         "trade_date": target_date.strftime("%Y-%m-%d"),
         "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -455,18 +507,22 @@ def _snapshot_payload(df: pd.DataFrame, target_date: pd.Timestamp, skip_avix: bo
         "clarity_signal": {
             "buy": today_buy.to_dict(orient="records"),
             "sell": today_sell.to_dict(orient="records"),
-            "rules": {"buy_breadth_floor": BUY_BREADTH_FLOOR, "sell_breadth_floor": SELL_BREADTH_FLOOR, "min_score": MIN_SCORE, "max_risk": MAX_RISK},
+            "rules": {
+                "buy_breadth_floor": BUY_BREADTH_FLOOR,
+                "sell_breadth_floor": SELL_BREADTH_FLOOR,
+                "min_score": MIN_SCORE,
+                "max_risk": MAX_RISK,
+            },
         },
         "s3_signal": _latest_strategy_payload(signal_history, "s3"),
         "s4_signal": _latest_strategy_payload(signal_history, "s4"),
         "s3_s4_signal": _latest_strategy_payload(signal_history, "s3_s4"),
         "avix": avix_payload,
-        "sectors": df.to_dict(orient="records"),
+        "sectors": sectors,
     }
 
 
 def main() -> int:
-    install_runtime_guard(sys.modules[__name__])
     parser = argparse.ArgumentParser()
     parser.add_argument("--target-date", help="YYYY-MM-DD；默认按北京时间和交易日历推导")
     parser.add_argument("--force", action="store_true", help="忽略已更新状态，强制重算")
@@ -483,12 +539,14 @@ def main() -> int:
     if args.target_date:
         target_date = pd.Timestamp(args.target_date).normalize()
         if not _is_trade_day(target_date, calendar):
-            _write_json(STATUS_FILE, _status(args.target_date, "skipped", "目标日期不是 A 股交易日"))
+            payload = _status(args.target_date, "skipped", "目标日期不是 A 股交易日")
+            _write_json(STATUS_FILE, payload)
             return 0
     else:
         target_date, reason = _target_trade_date(now, calendar)
         if target_date is None:
-            _write_json(STATUS_FILE, _status(None, "skipped", reason))
+            payload = _status(None, "skipped", reason)
+            _write_json(STATUS_FILE, payload)
             return 0
 
     target_str = target_date.strftime("%Y-%m-%d")
@@ -512,10 +570,14 @@ def main() -> int:
 
     payload = _snapshot_payload(df, target_date, skip_avix=args.skip_avix)
     if args.skip_backtest:
-        backtest_payload = _read_json(BACKTEST_DIR / "strategy_summary.json") or {"generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"), "lookback_days": 360, "status": "skipped", "error": "本次跳过回测刷新，且不存在历史回测缓存"}
+        backtest_payload = _read_json(BACKTEST_DIR / "strategy_summary.json") or {
+            "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
+            "lookback_days": 360,
+            "status": "skipped",
+            "error": "本次跳过回测刷新，且不存在历史回测缓存",
+        }
     else:
         backtest_payload = _build_backtest_payload()
-
     _write_json(HISTORY_DIR / f"snapshot_{target_str}.json", payload)
     _write_json(LATEST_FILE, payload)
     _write_json(BACKTEST_DIR / "strategy_summary.json", backtest_payload)

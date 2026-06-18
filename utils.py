@@ -19,6 +19,10 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_CACHE_FILE = DATA_DIR / "processed_sw_cache.csv"
 A_SHARE_SNAPSHOT_CACHE_FILE = DATA_DIR / "a_share_close_snapshot.csv"
 PROCESSED_CACHE_TTL_SECONDS = int(os.environ.get("SW_PROCESSED_CACHE_TTL_SECONDS", str(30 * 60)))
+FINAL_BUY_BREADTH_FLOOR = 0.70
+FINAL_SELL_BREADTH_FLOOR = 0.35
+FINAL_MIN_SCORE = 54.0
+FINAL_MAX_RISK = 45.0
 SW_CURRENT_URL = "https://www.swsresearch.com/institute-sw/api/index_publish/current/"
 EM_A_SHARE_SNAPSHOT_URLS = [
     "https://82.push2.eastmoney.com/api/qt/clist/get",
@@ -662,10 +666,53 @@ def _summarize_backtest(bt: pd.DataFrame) -> Dict[str, float]:
 
 def _build_strategy_backtest(scored: pd.DataFrame, lookback_days: int, strategy: str) -> pd.DataFrame:
     bt_rows = []
+    holding = ""
     for dt, day in scored.groupby("date", sort=True):
         day = day.copy()
         breadth = float((day["涨跌幅"] > 0).mean()) if "涨跌幅" in day.columns else 0.5
         bench_ret = float(day["next_ret"].mean())
+        risk_col = "逃顶风险分" if "逃顶风险分" in day.columns else "逃顶风险简分"
+
+        if strategy == "top1_breadth_final":
+            if breadth < FINAL_SELL_BREADTH_FLOOR:
+                holding = ""
+            elif breadth >= FINAL_BUY_BREADTH_FLOOR:
+                picks = (
+                    day[
+                        (pd.to_numeric(day["综合博弈得分"], errors="coerce") >= FINAL_MIN_SCORE)
+                        & (pd.to_numeric(day[risk_col], errors="coerce") < FINAL_MAX_RISK)
+                    ]
+                    .sort_values("综合博弈得分", ascending=False)
+                    .head(1)
+                )
+                if not picks.empty:
+                    holding = str(picks.iloc[0]["板块名称"])
+
+            held = day[day["板块名称"].astype(str) == holding] if holding else pd.DataFrame()
+            if held.empty:
+                strategy_ret = 0.0
+                names = "空仓"
+                top_score = 0.0
+                risk = 0.0
+            else:
+                row = held.iloc[0]
+                strategy_ret = float(row["next_ret"])
+                names = holding
+                top_score = float(row["综合博弈得分"])
+                risk = float(row[risk_col])
+
+            bt_rows.append({
+                "date": dt,
+                "持有板块": names,
+                "综合博弈得分": top_score,
+                "风险分": risk,
+                "市场广度": breadth * 100,
+                "strategy_ret": strategy_ret,
+                "benchmark_ret": bench_ret,
+                "direction_hit": strategy_ret > 0,
+                "relative_hit": strategy_ret > bench_ret,
+            })
+            continue
 
         if strategy == "top1":
             tradable = day[day["逃顶风险简分"] < 78].copy()
