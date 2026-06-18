@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -29,8 +30,13 @@ transaction_cost_rate = payload.get("transaction_cost_rate", summary.get("单边
 
 FULLRISK_RESULTS_PATH = Path("data/backtest/top1_fullrisk_grid_300_results.csv")
 FULLRISK_TOP_PATH = Path("data/backtest/top1_fullrisk_grid_300_dedup_top.csv")
+FULLRISK_METADATA_PATH = Path("data/backtest/top1_fullrisk_grid_300_metadata.json")
 fullrisk_results = pd.read_csv(FULLRISK_RESULTS_PATH) if FULLRISK_RESULTS_PATH.exists() else pd.DataFrame()
 fullrisk_top = pd.read_csv(FULLRISK_TOP_PATH) if FULLRISK_TOP_PATH.exists() else pd.DataFrame()
+try:
+    fullrisk_meta = json.loads(FULLRISK_METADATA_PATH.read_text(encoding="utf-8")) if FULLRISK_METADATA_PATH.exists() else {}
+except Exception:
+    fullrisk_meta = {}
 
 
 def pct(value: object) -> str:
@@ -142,12 +148,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+meta_generated = fullrisk_meta.get("generated_at", "-")
+meta_range = f"{fullrisk_meta.get('first_trade_date', '-')} → {fullrisk_meta.get('last_trade_date', '-')}"
+meta_days = fullrisk_meta.get("observed_trade_days", "-")
+meta_method = fullrisk_meta.get("method", "static_csv_pending_regeneration")
 st.caption(
     "主卡来源：data/backtest/top1_fullrisk_grid_300_results.csv · "
-    "窗口：300日 · 口径：完整风险分参数网格 · "
+    f"窗口：300日 · 样本：{meta_range} · 交易日：{meta_days} · "
+    "口径：完整风险分参数网格 · "
     "主策略：Top1 + 广度过滤（买入70% / 卖出35% / 综合分>=54 / 风险<45）"
 )
-st.warning("该主卡使用 300 日完整风险分表作为基准回测。该 CSV 当前不含成本后收益字段，因此主卡不展示成本后收益；成本后口径需重新生成带交易成本的完整风险分表。")
+if fullrisk_meta:
+    st.success(f"完整风险分表已由脚本每日可复算生成：{meta_generated} · {meta_method}")
+    checks = fullrisk_meta.get("strict_checks") or []
+    if checks:
+        st.caption("严格检查：" + "；".join(str(x) for x in checks))
+else:
+    st.warning("当前 300 日完整风险分表尚未由新脚本生成 metadata。下一次 GitHub Actions 成功运行后会写入生成时间、样本区间和严格检查说明。")
+st.warning("该主卡使用 300 日完整风险分表作为基准回测。当前版本按你的要求暂不加入 ETF 成本，因此主卡不展示成本后收益。")
 
 if not fullrisk_top.empty:
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
