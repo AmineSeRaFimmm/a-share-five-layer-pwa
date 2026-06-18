@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-18 21:43:47",
+  "generated_at": "2026-06-18 22:15:38",
   "status": "ready",
   "update_mode": "promote",
   "promoted": true,
@@ -41,6 +41,9 @@
     "candidate_top20": "data/backtest/top1_fullrisk_grid_300_top20_candidate.csv",
     "candidate_dedup_top": "data/backtest/top1_fullrisk_grid_300_dedup_top_candidate.csv",
     "candidate_primary_path": "data/backtest/top1_fullrisk_grid_300_primary_path_candidate.csv",
+    "candidate_strategy_comparison": "data/backtest/top1_fullrisk_grid_300_strategy_comparison_candidate.csv",
+    "candidate_window_robustness": "data/backtest/top1_fullrisk_grid_300_window_robustness_candidate.csv",
+    "candidate_recent_signals": "data/backtest/top1_fullrisk_grid_300_recent_signals_candidate.csv",
     "compare_report": "data/backtest/top1_fullrisk_grid_300_compare_report.json",
     "official_results": "data/backtest/top1_fullrisk_grid_300_results.csv"
   },
@@ -50,6 +53,7 @@
     "next_ret 仅用于下一交易日验证，不进入当日评分",
     "主策略参数固定为 70/35/54/45",
     "当前版本暂不加入 ETF 成本",
+    "正式净值曲线包含策略、行业等权和沪深300指数三条线",
     "默认影子对账模式不覆盖正式表，只有 --promote 才覆盖"
   ]
 }
