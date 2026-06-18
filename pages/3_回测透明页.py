@@ -73,6 +73,15 @@ def number_plain(value: float | None) -> str:
         return "-"
 
 
+def count_plain(value: float | None) -> str:
+    if value is None:
+        return "-"
+    try:
+        return f"{int(float(value))}"
+    except Exception:
+        return "-"
+
+
 cost_rate = summary.get("单边成本假设", 0.001)
 try:
     cost_note = f"单边成本 {float(cost_rate) * 100:.2f}%"
@@ -91,8 +100,8 @@ st.markdown(
 <div class="metric-grid" style="margin-top:12px;">
   {metric_card("盈亏比", number_plain(summary.get("盈亏比")), "平均盈利 / 平均亏损绝对值")}
   {metric_card("持仓暴露率", pct_plain(summary.get("持仓暴露率")), "持仓日 / 总交易日")}
-  {metric_card("交易次数", f"{int(float(summary.get('交易次数', 0)))}", f"{lookback_days}日窗口")}
-  {metric_card("成本后收益", pct(summary.get("成本后收益", 0)), cost_note)}
+  {metric_card("交易次数", count_plain(summary.get("交易次数")), f"{lookback_days}日窗口")}
+  {metric_card("成本后收益", pct(summary.get("成本后收益", None)), cost_note)}
 </div>
 """,
     unsafe_allow_html=True,
