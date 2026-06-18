@@ -48,12 +48,17 @@ def _patch_streamlit_cache_for_headless() -> None:
 _patch_streamlit_cache_for_headless()
 
 from avix_utils import calculate_and_store_avix, load_avix_history, build_avix_s3_s4_signal_history  # noqa: E402
-from utils import (  # noqa: E402
-    fetch_historical_baselines,
-    get_processed_sw_data,
+from backtest_runtime import (  # noqa: E402
+    BACKTEST_SCORE_BASIS,
+    BACKTEST_SCORE_BASIS_NOTE,
+    BACKTEST_TRANSACTION_COST_RATE,
     _build_strategy_backtest,
     _build_walk_forward_scores,
     _summarize_backtest,
+)
+from utils import (  # noqa: E402
+    fetch_historical_baselines,
+    get_processed_sw_data,
 )
 
 DATA_DIR = ROOT / "data"
@@ -450,10 +455,24 @@ def _comparison_row(label: str, summary: dict[str, float]) -> dict | None:
 
 def _build_backtest_payload(lookback_days: int = 360) -> dict:
     generated_at = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+    base_payload = {
+        "generated_at": generated_at,
+        "lookback_days": lookback_days,
+        "score_basis": BACKTEST_SCORE_BASIS,
+        "score_basis_note": BACKTEST_SCORE_BASIS_NOTE,
+        "transaction_cost_rate": BACKTEST_TRANSACTION_COST_RATE,
+        "strategy_rules": {
+            "buy_breadth_floor": BUY_BREADTH_FLOOR,
+            "sell_breadth_floor": SELL_BREADTH_FLOOR,
+            "min_score": MIN_SCORE,
+            "max_risk": MAX_RISK,
+            "selection": "Top1 by 综合博弈得分",
+        },
+    }
     try:
         scored = _build_walk_forward_scores(520)
         if scored.empty:
-            return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "empty", "error": "滚动评分结果为空"}
+            return {**base_payload, "status": "empty", "error": "滚动评分结果为空"}
 
         bt = _build_strategy_backtest(scored, lookback_days, "top1_breadth_final")
         summary = _summarize_backtest(bt)
@@ -484,6 +503,7 @@ def _build_backtest_payload(lookback_days: int = 360) -> dict:
                 "方向胜率": w_summary["胜率"],
                 "相对胜率": w_summary["相对胜率"],
                 "累计收益": w_summary["累计收益"],
+                "成本后收益": w_summary.get("成本后收益", w_summary["累计收益"]),
                 "等权基准": w_summary["基准收益"],
                 "年化收益": w_summary["年化收益"],
                 "最大回撤": w_summary["最大回撤"],
@@ -492,25 +512,30 @@ def _build_backtest_payload(lookback_days: int = 360) -> dict:
         robust_df = pd.DataFrame(robust_rows)
 
         if bt.empty or not summary:
-            return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "empty", "error": "回测结果为空"}
+            return {**base_payload, "status": "empty", "error": "回测结果为空"}
 
         recent = bt.tail(30).copy()
         if "date" in recent.columns:
             recent["date"] = pd.to_datetime(recent["date"], errors="coerce").dt.strftime("%Y-%m-%d")
         if "strategy_ret" in recent.columns:
             recent["模型次日收益"] = pd.to_numeric(recent["strategy_ret"], errors="coerce") * 100
+        if "net_strategy_ret" in recent.columns:
+            recent["成本后次日收益"] = pd.to_numeric(recent["net_strategy_ret"], errors="coerce") * 100
         if "benchmark_ret" in recent.columns:
             recent["等权次日收益"] = pd.to_numeric(recent["benchmark_ret"], errors="coerce") * 100
 
-        curve_cols = [c for c in ["date", "strategy_nav", "benchmark_nav"] if c in bt.columns]
+        curve_cols = [c for c in ["date", "strategy_nav", "net_strategy_nav", "benchmark_nav"] if c in bt.columns]
         curve = bt[curve_cols].tail(260).copy()
         if "date" in curve.columns:
             curve["date"] = pd.to_datetime(curve["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-        signal_cols = ["date", "持有板块", "综合博弈得分", "风险分", "风险简分", "模型次日收益", "等权次日收益"]
+        signal_cols = [
+            "date", "持有板块", "action", "综合博弈得分", "风险分", "风险简分",
+            "市场广度", "regime_factor", "micro_factor", "transaction_cost",
+            "模型次日收益", "成本后次日收益", "等权次日收益",
+        ]
         return {
-            "generated_at": generated_at,
-            "lookback_days": lookback_days,
+            **base_payload,
             "status": "ready",
             "summary": summary,
             "recent_curve": curve.to_dict(orient="records"),
@@ -519,7 +544,7 @@ def _build_backtest_payload(lookback_days: int = 360) -> dict:
             "recent_signals": recent[[c for c in signal_cols if c in recent.columns]].to_dict(orient="records"),
         }
     except Exception as exc:
-        return {"generated_at": generated_at, "lookback_days": lookback_days, "status": "error", "error": str(exc)}
+        return {**base_payload, "status": "error", "error": str(exc)}
 
 
 def _latest_strategy_payload(signal_history: list[dict], strategy: str) -> dict:
