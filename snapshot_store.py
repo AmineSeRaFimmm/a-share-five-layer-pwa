@@ -15,6 +15,8 @@ BOARD_HISTORY_FILE = DATA_DIR / "sw_board_history.csv"
 HISTORY_DIR = DATA_DIR / "history"
 RECOMMENDATION_STATE_FILE = DATA_DIR / "recommendation_state.json"
 BACKTEST_SUMMARY_FILE = DATA_DIR / "backtest" / "strategy_summary.json"
+AVIX_HISTORY_FILE = DATA_DIR / "avix" / "avix_history.csv"
+AVIX_SIGNAL_FILE = DATA_DIR / "avix_s3_s4_signals.csv"
 
 
 NUMERIC_COLUMNS = [
@@ -55,6 +57,15 @@ def _load_json_file(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
 def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
     res = df.copy()
     for col in NUMERIC_COLUMNS:
@@ -63,24 +74,87 @@ def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return res
 
 
-def _state_is_flat_without_sell() -> bool:
+def _state_has_no_active_holding() -> bool:
     state = _load_json_file(RECOMMENDATION_STATE_FILE)
-    return bool(
-        state
-        and state.get("position_state") == "flat"
-        and not state.get("holdings")
-        and not state.get("last_sell")
-    )
+    if not state:
+        return False
+    holdings = state.get("holdings") or []
+    if holdings:
+        return False
+    position_state = str(state.get("position_state", "")).lower()
+    return position_state in {"", "flat"} or bool(state.get("last_sell_trade_date"))
 
 
-def _sanitize_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
-    if not payload or not _state_is_flat_without_sell():
+def _sanitize_snapshot_sell_rows(payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload or not _state_has_no_active_holding():
         return payload
     out = dict(payload)
     clarity = dict(out.get("clarity_signal") or {})
     clarity["sell"] = []
     out["clarity_signal"] = clarity
     return out
+
+
+def _load_avix_history_cache() -> pd.DataFrame:
+    hist = _read_csv(AVIX_HISTORY_FILE)
+    if hist.empty or not {"trade_date", "avix"}.issubset(hist.columns):
+        return pd.DataFrame()
+    hist = hist.copy()
+    hist["trade_date"] = pd.to_datetime(hist["trade_date"], errors="coerce")
+    hist["avix"] = pd.to_numeric(hist["avix"], errors="coerce")
+    hist = hist.dropna(subset=["trade_date", "avix"]).sort_values("trade_date")
+    if hist.empty:
+        return pd.DataFrame()
+    hist = hist.drop_duplicates("trade_date", keep="last").reset_index(drop=True)
+    return hist
+
+
+def _load_avix_signal_cache() -> pd.DataFrame:
+    sig = _read_csv(AVIX_SIGNAL_FILE)
+    if sig.empty or not {"trade_date", "avix"}.issubset(sig.columns):
+        return pd.DataFrame()
+    sig = sig.copy()
+    sig["trade_date"] = pd.to_datetime(sig["trade_date"], errors="coerce")
+    sig["avix"] = pd.to_numeric(sig["avix"], errors="coerce")
+    sig = sig.dropna(subset=["trade_date", "avix"]).sort_values("trade_date")
+    return sig.reset_index(drop=True)
+
+
+def _refresh_snapshot_avix_from_cache(payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload:
+        return payload
+    hist = _load_avix_history_cache()
+    if hist.empty:
+        return payload
+
+    out = dict(payload)
+    avix_payload = dict(out.get("avix") or {})
+    latest = hist.iloc[-1].to_dict()
+    latest["trade_date"] = pd.Timestamp(latest["trade_date"]).strftime("%Y-%m-%d")
+    if "valuation_time" in latest and pd.notna(latest.get("valuation_time")):
+        latest["valuation_time"] = str(latest["valuation_time"])
+    latest.setdefault("source", "AVIX_CACHE")
+    latest.setdefault("quality", "缓存最新")
+
+    hist_out = hist.copy()
+    hist_out["trade_date"] = hist_out["trade_date"].dt.strftime("%Y-%m-%d")
+    signal_hist = _load_avix_signal_cache()
+    if not signal_hist.empty:
+        signal_hist = signal_hist.copy()
+        signal_hist["trade_date"] = signal_hist["trade_date"].dt.strftime("%Y-%m-%d")
+        avix_payload["signal_history"] = signal_hist.to_dict(orient="records")
+
+    avix_payload["latest"] = latest
+    avix_payload["history"] = hist_out.to_dict(orient="records")
+    avix_payload["cache_note"] = "AVIX优先读取 data/avix/avix_history.csv 最新缓存"
+    out["avix"] = avix_payload
+    return out
+
+
+def _sanitize_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = _sanitize_snapshot_sell_rows(payload)
+    payload = _refresh_snapshot_avix_from_cache(payload)
+    return payload
 
 
 def _snapshot_frame_from_payload(payload: dict[str, Any]) -> pd.DataFrame:
