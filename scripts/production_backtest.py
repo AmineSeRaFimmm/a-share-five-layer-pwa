@@ -14,6 +14,7 @@ BUY_BREADTH_FLOOR = 0.60
 SELL_BREADTH_FLOOR = 0.45
 MIN_SCORE = 58.0
 MAX_RISK = 55.0
+TRANSACTION_COST_RATE = 0.001
 RAW_COLS = ["trend_raw", "fund_raw", "abnormal_raw", "trap_raw", "efficiency_raw", "mid_confirm_raw"]
 
 
@@ -149,6 +150,7 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
         return pd.DataFrame()
     rows: list[dict] = []
     current_position = ""
+    current_trade_id = 0
     for dt, day in scored.groupby("date", sort=True):
         day = day.copy()
         breadth = float((day["涨跌幅"] > 0).mean())
@@ -156,12 +158,18 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
         action = "flat"
         display_position = ""
         selected = pd.DataFrame()
+        trade_id = 0
+        cost_rate = 0.0
 
         if breadth < SELL_BREADTH_FLOOR:
             sold_position = current_position
+            sold_trade_id = current_trade_id
             current_position = ""
+            current_trade_id = 0
             action = "sell" if sold_position else "flat"
             display_position = sold_position
+            trade_id = sold_trade_id if sold_position else 0
+            cost_rate = TRANSACTION_COST_RATE if sold_position else 0.0
         else:
             if breadth >= BUY_BREADTH_FLOOR:
                 candidate = (
@@ -171,10 +179,17 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
                 )
                 if not candidate.empty:
                     new_position = str(candidate.iloc[0]["板块名称"])
-                    action = "buy" if current_position != new_position else "hold"
+                    if current_position != new_position:
+                        is_rotation = bool(current_position)
+                        current_trade_id += 1
+                        cost_rate = TRANSACTION_COST_RATE * (2.0 if is_rotation else 1.0)
+                        action = "buy"
+                    else:
+                        action = "hold"
                     current_position = new_position
             if current_position:
                 selected = day[day["板块名称"].astype(str) == current_position].head(1)
+                trade_id = current_trade_id
                 if action == "flat":
                     action = "hold"
 
@@ -183,12 +198,15 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
             names = display_position or "空仓"
             top_score = 0.0
             risk = 0.0
+            is_holding = False
         else:
             strategy_ret = float(selected["next_ret"].iloc[0])
             names = str(selected["板块名称"].iloc[0])
             top_score = float(selected["综合博弈得分"].iloc[0])
             risk = float(selected["逃顶风险简分"].iloc[0])
+            is_holding = True
 
+        net_strategy_ret = (1.0 + strategy_ret) * (1.0 - cost_rate) - 1.0
         rows.append({
             "date": dt,
             "策略": PRIMARY_STRATEGY_LABEL,
@@ -197,7 +215,11 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
             "综合博弈得分": top_score,
             "风险简分": risk,
             "市场广度": breadth * 100,
+            "trade_id": trade_id,
+            "is_holding": is_holding,
+            "transaction_cost": cost_rate,
             "strategy_ret": strategy_ret,
+            "net_strategy_ret": net_strategy_ret,
             "benchmark_ret": bench_ret,
             "direction_hit": strategy_ret > 0,
             "relative_hit": strategy_ret > bench_ret,
@@ -207,6 +229,7 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
     if bt.empty:
         return bt
     bt["strategy_nav"] = (1 + bt["strategy_ret"]).cumprod()
+    bt["net_strategy_nav"] = (1 + bt["net_strategy_ret"]).cumprod()
     bt["benchmark_nav"] = (1 + bt["benchmark_ret"]).cumprod()
     return bt
 
@@ -254,12 +277,26 @@ def build_reference_backtest(scored: pd.DataFrame, lookback_days: int, strategy:
     return bt
 
 
+def _trade_returns(bt: pd.DataFrame, ret_col: str) -> pd.Series:
+    if "trade_id" not in bt.columns:
+        return pd.Series(dtype=float)
+    trade_df = bt[pd.to_numeric(bt["trade_id"], errors="coerce").fillna(0) > 0].copy()
+    if trade_df.empty or ret_col not in trade_df.columns:
+        return pd.Series(dtype=float)
+    grouped = trade_df.groupby("trade_id")[ret_col].apply(lambda x: float((1.0 + pd.to_numeric(x, errors="coerce").fillna(0.0)).prod() - 1.0))
+    return grouped.dropna()
+
+
 def summarize_backtest(bt: pd.DataFrame) -> dict[str, float]:
     if bt.empty:
         return {}
     bt = bt.copy()
     if "strategy_nav" not in bt.columns:
         bt["strategy_nav"] = (1 + bt["strategy_ret"]).cumprod()
+    if "net_strategy_ret" not in bt.columns:
+        bt["net_strategy_ret"] = bt["strategy_ret"]
+    if "net_strategy_nav" not in bt.columns:
+        bt["net_strategy_nav"] = (1 + bt["net_strategy_ret"]).cumprod()
     if "benchmark_nav" not in bt.columns:
         bt["benchmark_nav"] = (1 + bt["benchmark_ret"]).cumprod()
 
@@ -268,6 +305,20 @@ def summarize_backtest(bt: pd.DataFrame) -> dict[str, float]:
         return float(dd.min())
 
     periods = max(len(bt), 1)
+    holding_mask = bt.get("is_holding", pd.Series(False, index=bt.index)).astype(bool)
+    holding_days = int(holding_mask.sum())
+    holding_win_rate = float((bt.loc[holding_mask, "strategy_ret"] > 0).mean()) if holding_days else 0.0
+    exposure = float(holding_days / periods) if periods else 0.0
+
+    trades = _trade_returns(bt, "net_strategy_ret")
+    trade_count = int(len(trades))
+    trade_win_rate = float((trades > 0).mean()) if trade_count else 0.0
+    wins = trades[trades > 0]
+    losses = trades[trades < 0]
+    avg_win = float(wins.mean()) if not wins.empty else 0.0
+    avg_loss = float(losses.mean()) if not losses.empty else 0.0
+    profit_loss_ratio = float(avg_win / abs(avg_loss)) if avg_loss < 0 else 0.0
+
     return {
         "交易日数": float(periods),
         "胜率": float(bt["direction_hit"].mean()),
@@ -277,4 +328,13 @@ def summarize_backtest(bt: pd.DataFrame) -> dict[str, float]:
         "年化收益": float(bt["strategy_nav"].iloc[-1] ** (252 / periods) - 1.0),
         "最大回撤": _max_drawdown(bt["strategy_nav"]),
         "夏普比率": float((bt["strategy_ret"].mean() / (bt["strategy_ret"].std(ddof=0) + 1e-9)) * np.sqrt(252)),
+        "持仓日胜率": holding_win_rate,
+        "交易胜率": trade_win_rate,
+        "平均盈利": avg_win,
+        "平均亏损": avg_loss,
+        "盈亏比": profit_loss_ratio,
+        "持仓暴露率": exposure,
+        "交易次数": float(trade_count),
+        "成本后收益": float(bt["net_strategy_nav"].iloc[-1] - 1.0),
+        "单边成本假设": TRANSACTION_COST_RATE,
     }
