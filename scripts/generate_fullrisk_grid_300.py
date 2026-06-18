@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from datetime import datetime
@@ -25,12 +26,23 @@ from utils import (  # noqa: E402
 
 DATA_DIR = ROOT / "data"
 BACKTEST_DIR = DATA_DIR / "backtest"
+
+# Official production files that the model backtest page reads.
 RESULTS_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_results.csv"
 TOP20_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_top20.csv"
 DEDUP_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_dedup_top.csv"
 METADATA_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_metadata.json"
 PANEL_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_panel.parquet"
 PRIMARY_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_primary_path.csv"
+
+# Shadow files generated daily until the new generator is reconciled with the trusted baseline.
+CANDIDATE_RESULTS_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_results_candidate.csv"
+CANDIDATE_TOP20_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_top20_candidate.csv"
+CANDIDATE_DEDUP_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_dedup_top_candidate.csv"
+CANDIDATE_METADATA_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_metadata_candidate.json"
+CANDIDATE_PANEL_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_panel_candidate.parquet"
+CANDIDATE_PRIMARY_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_primary_path_candidate.csv"
+COMPARE_REPORT_FILE = BACKTEST_DIR / "top1_fullrisk_grid_300_compare_report.json"
 
 LOOKBACK_DAYS = 300
 WARMUP_DAYS = 90
@@ -44,6 +56,24 @@ BUY_BREADTHS = [0.55, 0.60, 0.65, 0.70]
 SELL_BREADTHS = [0.35, 0.40, 0.45, 0.50]
 SCORE_THRESHOLDS = [54, 56, 58, 60, 62, 65]
 RISK_THRESHOLDS = [45, 50, 55, 65]
+
+COMPARE_METRICS = [
+    "累计收益",
+    "年化收益",
+    "最大回撤",
+    "交易次数",
+    "交易胜率",
+    "日胜率",
+    "相对胜率",
+    "profit_factor",
+    "最长连续亏损",
+    "持仓占比",
+]
+
+# Shadow mode tolerance only classifies the reconciliation report; it does not promote or overwrite files.
+MAX_RETURN_DIFF_FOR_MATCH = 0.02
+MAX_DRAWDOWN_DIFF_FOR_MATCH = 0.02
+MAX_WINRATE_DIFF_FOR_MATCH = 0.03
 
 
 def _json_default(value):
@@ -59,6 +89,11 @@ def _json_default(value):
     except Exception:
         pass
     return value
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
 
 
 def _normalize_sw_history(raw: pd.DataFrame) -> pd.DataFrame:
@@ -88,8 +123,7 @@ def _normalize_sw_history(raw: pd.DataFrame) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
     for col in needed[1:]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=needed).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
-    return df
+    return df.dropna(subset=needed).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
 
 
 def _fetch_histories(extra_days: int = 180) -> Dict[str, pd.DataFrame]:
@@ -165,8 +199,9 @@ def _daily_panel_from_fullrisk(histories: Dict[str, pd.DataFrame], dt: pd.Timest
             ma20 = float(cut["close"].tail(20).mean())
             ma60 = float(cut["close"].tail(60).mean())
             ret20 = close / (float(cut["close"].iloc[-21]) + 1e-9) - 1.0
-            vol20 = max(float(np.std(np.diff(cut["close"].tail(20).to_numpy(dtype=float)) / (cut["close"].tail(20).to_numpy(dtype=float)[:-1] + 1e-9), ddof=0)), 1e-6)
-            up_days = float(np.mean(np.diff(cut["close"].tail(20).to_numpy(dtype=float)) > 0))
+            close20_tail = cut["close"].tail(20).to_numpy(dtype=float)
+            vol20 = max(float(np.std(np.diff(close20_tail) / (close20_tail[:-1] + 1e-9), ddof=0)), 1e-6)
+            up_days = float(np.mean(np.diff(close20_tail) > 0))
             mid_confirm_raw = (
                 0.45 * (ret20 / (vol20 + 1e-6))
                 + 0.25 * (close / (ma20 + 1e-9) - 1.0) * 100
@@ -397,32 +432,114 @@ def _dedup_results(results: pd.DataFrame) -> pd.DataFrame:
     return dedup.sort_values(["累计收益", "最大回撤", "交易胜率"], ascending=[False, False, False]).reset_index(drop=True)
 
 
-def generate_fullrisk_grid_300(write_panel: bool = True) -> dict:
-    BACKTEST_DIR.mkdir(parents=True, exist_ok=True)
-    panel = build_fullrisk_panel()
-    results, primary_bt = _grid_results(panel)
-    dedup = _dedup_results(results)
+def _primary_row(results: pd.DataFrame) -> dict:
+    row = results[
+        (results["买入广度"].round(4) == PRIMARY_BUY_BREADTH)
+        & (results["卖出广度"].round(4) == PRIMARY_SELL_BREADTH)
+        & (results["综合分阈值"].round(4) == PRIMARY_MIN_SCORE)
+        & (results["风险分阈值"].round(4) == PRIMARY_MAX_RISK)
+    ]
+    if row.empty:
+        raise RuntimeError("找不到主策略 70/35/54/45 结果行")
+    return row.iloc[0].to_dict()
 
-    results.to_csv(RESULTS_FILE, index=False, encoding="utf-8-sig")
-    results.head(20).to_csv(TOP20_FILE, index=False, encoding="utf-8-sig")
-    dedup.head(20).to_csv(DEDUP_FILE, index=False, encoding="utf-8-sig")
-    primary_bt.to_csv(PRIMARY_FILE, index=False, encoding="utf-8-sig")
-    if write_panel:
+
+def _load_official_primary() -> dict | None:
+    if not RESULTS_FILE.exists():
+        return None
+    try:
+        official = pd.read_csv(RESULTS_FILE)
+        for col in ["买入广度", "卖出广度", "综合分阈值", "风险分阈值", *COMPARE_METRICS]:
+            if col in official.columns:
+                official[col] = pd.to_numeric(official[col], errors="coerce")
+        return _primary_row(official)
+    except Exception:
+        return None
+
+
+def _compare_primary(candidate: dict, official: dict | None) -> dict:
+    if official is None:
+        return {
+            "status": "no_official_baseline",
+            "message": "未找到正式基准表，candidate 已生成但未自动提升为正式表。",
+            "official_primary": None,
+            "candidate_primary": candidate,
+            "metric_diffs": {},
+        }
+    diffs: dict[str, dict] = {}
+    for metric in COMPARE_METRICS:
+        old = official.get(metric)
+        new = candidate.get(metric)
+        try:
+            old_f = float(old)
+            new_f = float(new)
+            diff = new_f - old_f
+        except Exception:
+            old_f = old
+            new_f = new
+            diff = None
+        diffs[metric] = {"official": old_f, "candidate": new_f, "diff": diff}
+
+    return_diff = abs(float(diffs["累计收益"]["diff"])) if diffs.get("累计收益", {}).get("diff") is not None else np.inf
+    dd_diff = abs(float(diffs["最大回撤"]["diff"])) if diffs.get("最大回撤", {}).get("diff") is not None else np.inf
+    wr_diff = abs(float(diffs["交易胜率"]["diff"])) if diffs.get("交易胜率", {}).get("diff") is not None else np.inf
+    status = "match_within_tolerance" if (
+        return_diff <= MAX_RETURN_DIFF_FOR_MATCH
+        and dd_diff <= MAX_DRAWDOWN_DIFF_FOR_MATCH
+        and wr_diff <= MAX_WINRATE_DIFF_FOR_MATCH
+    ) else "mismatch_requires_review"
+    return {
+        "status": status,
+        "message": "candidate 与正式基准表差异在容忍范围内。" if status == "match_within_tolerance" else "candidate 与正式基准表差异较大，需人工复核后再 promote。",
+        "official_primary": official,
+        "candidate_primary": candidate,
+        "metric_diffs": diffs,
+        "tolerance": {
+            "max_return_diff": MAX_RETURN_DIFF_FOR_MATCH,
+            "max_drawdown_diff": MAX_DRAWDOWN_DIFF_FOR_MATCH,
+            "max_winrate_diff": MAX_WINRATE_DIFF_FOR_MATCH,
+        },
+    }
+
+
+def _write_outputs(results: pd.DataFrame, dedup: pd.DataFrame, primary_bt: pd.DataFrame, panel: pd.DataFrame, metadata: dict, promote: bool) -> None:
+    BACKTEST_DIR.mkdir(parents=True, exist_ok=True)
+    results.to_csv(CANDIDATE_RESULTS_FILE, index=False, encoding="utf-8-sig")
+    results.head(20).to_csv(CANDIDATE_TOP20_FILE, index=False, encoding="utf-8-sig")
+    dedup.head(20).to_csv(CANDIDATE_DEDUP_FILE, index=False, encoding="utf-8-sig")
+    primary_bt.to_csv(CANDIDATE_PRIMARY_FILE, index=False, encoding="utf-8-sig")
+    _write_json(CANDIDATE_METADATA_FILE, metadata)
+    try:
+        panel.to_parquet(CANDIDATE_PANEL_FILE, index=False)
+    except Exception:
+        panel.to_csv(CANDIDATE_PANEL_FILE.with_suffix(".csv"), index=False, encoding="utf-8-sig")
+
+    if promote:
+        results.to_csv(RESULTS_FILE, index=False, encoding="utf-8-sig")
+        results.head(20).to_csv(TOP20_FILE, index=False, encoding="utf-8-sig")
+        dedup.head(20).to_csv(DEDUP_FILE, index=False, encoding="utf-8-sig")
+        primary_bt.to_csv(PRIMARY_FILE, index=False, encoding="utf-8-sig")
+        _write_json(METADATA_FILE, {**metadata, "promoted": True})
         try:
             panel.to_parquet(PANEL_FILE, index=False)
         except Exception:
             panel.to_csv(PANEL_FILE.with_suffix(".csv"), index=False, encoding="utf-8-sig")
 
-    primary = results[
-        (results["买入广度"].round(4) == PRIMARY_BUY_BREADTH)
-        & (results["卖出广度"].round(4) == PRIMARY_SELL_BREADTH)
-        & (results["综合分阈值"].round(4) == PRIMARY_MIN_SCORE)
-        & (results["风险分阈值"].round(4) == PRIMARY_MAX_RISK)
-    ].iloc[0].to_dict()
+
+def generate_fullrisk_grid_300(promote: bool = False) -> dict:
+    BACKTEST_DIR.mkdir(parents=True, exist_ok=True)
+    panel = build_fullrisk_panel()
+    results, primary_bt = _grid_results(panel)
+    dedup = _dedup_results(results)
+    candidate_primary = _primary_row(results)
+    official_primary = _load_official_primary()
+    compare = _compare_primary(candidate_primary, official_primary)
 
     metadata = {
         "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
         "status": "ready",
+        "update_mode": "promote" if promote else "shadow_compare",
+        "promoted": bool(promote),
         "script": "scripts/generate_fullrisk_grid_300.py",
         "method": "daily_recomputed_full_3d_risk_no_simple_fallback",
         "lookback_days": LOOKBACK_DAYS,
@@ -439,12 +556,15 @@ def generate_fullrisk_grid_300(write_panel: bool = True) -> dict:
             "min_score": PRIMARY_MIN_SCORE,
             "max_risk": PRIMARY_MAX_RISK,
         },
-        "primary_summary": primary,
+        "primary_summary": candidate_primary,
+        "compare_status": compare["status"],
         "outputs": {
-            "results": str(RESULTS_FILE.relative_to(ROOT)),
-            "top20": str(TOP20_FILE.relative_to(ROOT)),
-            "dedup_top": str(DEDUP_FILE.relative_to(ROOT)),
-            "primary_path": str(PRIMARY_FILE.relative_to(ROOT)),
+            "candidate_results": str(CANDIDATE_RESULTS_FILE.relative_to(ROOT)),
+            "candidate_top20": str(CANDIDATE_TOP20_FILE.relative_to(ROOT)),
+            "candidate_dedup_top": str(CANDIDATE_DEDUP_FILE.relative_to(ROOT)),
+            "candidate_primary_path": str(CANDIDATE_PRIMARY_FILE.relative_to(ROOT)),
+            "compare_report": str(COMPARE_REPORT_FILE.relative_to(ROOT)),
+            "official_results": str(RESULTS_FILE.relative_to(ROOT)),
         },
         "strict_checks": [
             "完整风险分由 _build_3d_scores 逐日使用当日及以前历史生成",
@@ -452,14 +572,19 @@ def generate_fullrisk_grid_300(write_panel: bool = True) -> dict:
             "next_ret 仅用于下一交易日验证，不进入当日评分",
             "主策略参数固定为 70/35/54/45",
             "当前版本暂不加入 ETF 成本",
+            "默认影子对账模式不覆盖正式表，只有 --promote 才覆盖",
         ],
     }
-    METADATA_FILE.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
-    return metadata
+    _write_outputs(results, dedup, primary_bt, panel, metadata, promote=promote)
+    _write_json(COMPARE_REPORT_FILE, {**metadata, "comparison": compare})
+    return {**metadata, "comparison": compare}
 
 
 def main() -> int:
-    metadata = generate_fullrisk_grid_300(write_panel=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--promote", action="store_true", help="将 candidate 结果提升并覆盖正式 300 日完整风险分表。默认只做影子对账。")
+    args = parser.parse_args()
+    metadata = generate_fullrisk_grid_300(promote=args.promote)
     print(json.dumps(metadata, ensure_ascii=False, indent=2, default=_json_default))
     return 0
 
