@@ -117,7 +117,7 @@ def _write_recommendation_state(
         "holdings": rows,
         "last_buy_trade_date": trade_date if action == "buy" else prior_buy_date,
         "last_sell_trade_date": trade_date if action == "sell" else prior_sell_date,
-        "last_sell": sell_rows if action == "sell" else (previous_state.get("last_sell", []) if isinstance(previous_state, dict) else []),
+        "last_sell": sell_rows if action == "sell" else [],
     })
 
 
@@ -135,11 +135,7 @@ def _build_recommendations(df: pd.DataFrame, history_file: Path, target_date: pd
     previous_hold = _load_recommendation_holding(target_date, history_file)
     sell_rows = []
     if breadth_ratio < uds.SELL_BREADTH_FLOOR:
-        if previous_hold.empty:
-            state = uds._read_json(uds.RECOMMENDATION_STATE_FILE)
-            if state.get("last_sell_trade_date") == target_date.strftime("%Y-%m-%d"):
-                sell_rows = state.get("last_sell", []) or []
-        else:
+        if not previous_hold.empty:
             for _, hold in previous_hold.iterrows():
                 name = str(hold.get("板块名称", ""))
                 if not name:
