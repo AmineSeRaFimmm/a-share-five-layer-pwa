@@ -151,6 +151,7 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
     rows: list[dict] = []
     current_position = ""
     current_trade_id = 0
+    next_trade_id = 0
     for dt, day in scored.groupby("date", sort=True):
         day = day.copy()
         breadth = float((day["涨跌幅"] > 0).mean())
@@ -181,7 +182,8 @@ def build_top1_breadth_backtest(scored: pd.DataFrame, lookback_days: int = 360) 
                     new_position = str(candidate.iloc[0]["板块名称"])
                     if current_position != new_position:
                         is_rotation = bool(current_position)
-                        current_trade_id += 1
+                        next_trade_id += 1
+                        current_trade_id = next_trade_id
                         cost_rate = TRANSACTION_COST_RATE * (2.0 if is_rotation else 1.0)
                         action = "buy"
                     else:
