@@ -51,6 +51,10 @@ jobs:
             python scripts/update_daily_snapshot.py --force
           fi
 
+      - name: Build live recommendation ledger
+        run: |
+          python scripts/update_live_recommendation_history.py
+
       - name: Commit data changes
         run: |
           git config user.name "github-actions[bot]"
