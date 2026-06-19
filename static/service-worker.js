@@ -1,9 +1,11 @@
-const CACHE_NAME = "a-share-five-layer-v1";
+const CACHE_NAME = "a-share-five-layer-v2";
+const ICON_VERSION = "20260619-light-logo-v2";
 const CORE_ASSETS = [
   "/",
-  "/app/static/manifest.webmanifest",
-  "/app/static/icon-192.png",
-  "/app/static/icon-512.png"
+  `/app/static/manifest.webmanifest?v=${ICON_VERSION}`,
+  `/app/static/icon-180.png?v=${ICON_VERSION}`,
+  `/app/static/icon-192.png?v=${ICON_VERSION}`,
+  `/app/static/icon-512.png?v=${ICON_VERSION}`
 ];
 
 self.addEventListener("install", (event) => {
