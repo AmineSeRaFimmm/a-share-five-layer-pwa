@@ -36,7 +36,7 @@
   if (!targetDocument.querySelector('link[rel="apple-touch-icon"]')) {
     const icon = targetDocument.createElement("link");
     icon.rel = "apple-touch-icon";
-    icon.href = "/app/static/icon-192.png";
+    icon.href = "/app/static/icon-180.png";
     head.appendChild(icon);
   }
 
