@@ -1,16 +1,21 @@
 (() => {
+  const ICON_VERSION = "20260619-light-logo-v2";
   const targetWindow = window.parent || window;
   const targetDocument = targetWindow.document || document;
   const head = targetDocument.head || targetDocument.getElementsByTagName("head")[0];
   if (!head) return;
 
-  const manifestHref = "/app/static/manifest.webmanifest";
-  if (!targetDocument.querySelector(`link[rel="manifest"][href="${manifestHref}"]`)) {
-    const manifest = targetDocument.createElement("link");
-    manifest.rel = "manifest";
-    manifest.href = manifestHref;
-    head.appendChild(manifest);
-  }
+  const versioned = (path) => `${path}?v=${ICON_VERSION}`;
+
+  const replaceLink = (selector, rel, href) => {
+    targetDocument.querySelectorAll(selector).forEach((node) => node.remove());
+    const link = targetDocument.createElement("link");
+    link.rel = rel;
+    link.href = href;
+    head.appendChild(link);
+  };
+
+  replaceLink('link[rel="manifest"]', "manifest", versioned("/app/static/manifest.webmanifest"));
 
   if (!targetDocument.querySelector('meta[name="theme-color"]')) {
     const theme = targetDocument.createElement("meta");
@@ -33,14 +38,9 @@
     head.appendChild(appleTitle);
   }
 
-  if (!targetDocument.querySelector('link[rel="apple-touch-icon"]')) {
-    const icon = targetDocument.createElement("link");
-    icon.rel = "apple-touch-icon";
-    icon.href = "/app/static/icon-180.png";
-    head.appendChild(icon);
-  }
+  replaceLink('link[rel="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]', "apple-touch-icon", versioned("/app/static/icon-180.png"));
 
   if ("serviceWorker" in targetWindow.navigator) {
-    targetWindow.navigator.serviceWorker.register("/app/static/service-worker.js").catch(() => {});
+    targetWindow.navigator.serviceWorker.register(versioned("/app/static/service-worker.js")).catch(() => {});
   }
 })();
