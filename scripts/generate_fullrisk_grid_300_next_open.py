@@ -1,15 +1,35 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
-import generate_fullrisk_grid_300 as base
+SCRIPT_DIR = Path(__file__).resolve().parent
+BASE_PATH = SCRIPT_DIR / "generate_fullrisk_grid_300_base.py"
+
+
+def _load_base_module():
+    existing = sys.modules.get("generate_fullrisk_grid_300")
+    if existing is not None and hasattr(existing, "_fetch_histories") and hasattr(existing, "build_fullrisk_panel"):
+        return existing
+    spec = importlib.util.spec_from_file_location("generate_fullrisk_grid_300", BASE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load base full-risk generator from {BASE_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["generate_fullrisk_grid_300"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+base = _load_base_module()
 
 
 def _attach_execution_prices(panel: pd.DataFrame, histories: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -247,6 +267,24 @@ def _grid_results(panel: pd.DataFrame, hs300: pd.DataFrame) -> tuple[pd.DataFram
     return results, base._attach_hs300(primary_bt, hs300)
 
 
+def _window_robustness(panel: pd.DataFrame, hs300: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict] = []
+    for window in base.WINDOWS:
+        dates = sorted(panel["date"].dropna().unique())[-window:]
+        sub = panel[panel["date"].isin(dates)].copy()
+        bt, summary = run_top1_fullrisk_backtest(sub, base.PRIMARY_BUY_BREADTH, base.PRIMARY_SELL_BREADTH, base.PRIMARY_MIN_SCORE, base.PRIMARY_MAX_RISK, hs300=hs300)
+        if not summary:
+            continue
+        summary["窗口"] = f"{window}日"
+        summary["沪深300收益"] = float(bt["hs300_nav"].iloc[-1] - 1.0) if "hs300_nav" in bt.columns else np.nan
+        summary["行业等权收益"] = float(bt["benchmark_nav"].iloc[-1] - 1.0) if "benchmark_nav" in bt.columns else np.nan
+        rows.append(summary)
+    if not rows:
+        return pd.DataFrame()
+    cols = ["窗口", "累计收益", "行业等权收益", "沪深300收益", "年化收益", "最大回撤", "交易次数", "交易胜率", "日胜率", "相对胜率", "profit_factor", "持仓占比"]
+    return pd.DataFrame(rows)[[c for c in cols if c in pd.DataFrame(rows).columns]]
+
+
 def _recent_signals(primary_bt: pd.DataFrame, n: int = 30) -> pd.DataFrame:
     out = primary_bt.copy().sort_values("date", ascending=False).head(n)
     out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -263,7 +301,7 @@ def generate_fullrisk_grid_300(promote: bool = False) -> dict:
     results, primary_bt = _grid_results(panel, hs300)
     dedup = base._dedup_results(results)
     strategy_cmp = base._strategy_comparison(results)
-    window_robust = base._window_robustness(panel, hs300)
+    window_robust = _window_robustness(panel, hs300)
     recent_signals = _recent_signals(primary_bt)
     candidate_primary = base._primary_row(results)
     official_primary = base._load_official_primary()
