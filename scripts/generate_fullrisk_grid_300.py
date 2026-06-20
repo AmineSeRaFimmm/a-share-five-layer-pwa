@@ -19,11 +19,24 @@ def _install_base_module() -> None:
     spec.loader.exec_module(module)
 
 
+def _install_next_open_row_patch(next_open_module) -> None:
+    def _sector_row_as_dict(day, sector):
+        if not sector:
+            return None
+        rows = day[day["板块名称"].astype(str) == sector]
+        if rows.empty:
+            return None
+        return rows.iloc[0].to_dict()
+
+    next_open_module._sector_row = _sector_row_as_dict
+
+
 def main() -> int:
     _install_base_module()
-    from generate_fullrisk_grid_300_next_open import main as next_open_main
+    import generate_fullrisk_grid_300_next_open as next_open
 
-    return int(next_open_main())
+    _install_next_open_row_patch(next_open)
+    return int(next_open.main())
 
 
 if __name__ == "__main__":
