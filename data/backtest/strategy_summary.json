@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-19 22:32:17",
+  "generated_at": "2026-06-22 19:15:01",
   "lookback_days": 360,
   "score_basis": "historical_live_aligned_v1",
   "score_basis_note": "回测链路独立于今日复盘实时链路；历史得分复用实时六层权重，并加入市场广度 regime_factor 和历史截面微观结构代理因子。历史数据无法还原每日成分股级上涨占比，micro_factor 使用行业截面代理，因此不会改动今日复盘页的实时成分股级计算。",
