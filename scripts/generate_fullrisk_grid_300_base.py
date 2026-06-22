@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable
@@ -11,6 +13,7 @@ from zoneinfo import ZoneInfo
 import akshare as ak
 import numpy as np
 import pandas as pd
+import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -81,6 +84,29 @@ COMPARE_METRICS = [
 MAX_RETURN_DIFF_FOR_MATCH = 0.02
 MAX_DRAWDOWN_DIFF_FOR_MATCH = 0.02
 MAX_WINRATE_DIFF_FOR_MATCH = 0.03
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+SW_FETCH_TIMEOUT_SECONDS = _env_float("SW_FETCH_TIMEOUT_SECONDS", 15.0)
+SW_FETCH_RETRIES = max(1, _env_int("SW_FETCH_RETRIES", 3))
+SW_FETCH_RETRY_SLEEP_SECONDS = max(0.0, _env_float("SW_FETCH_RETRY_SLEEP_SECONDS", 2.0))
+
+
+def _log_sw_fetch(message: str) -> None:
+    print(f"[sw-history] {message}", file=sys.stderr, flush=True)
 
 
 def _json_default(value):
@@ -170,17 +196,54 @@ def _fetch_hs300_history() -> pd.DataFrame:
     raise RuntimeError("沪深300指数历史数据获取失败：" + "；".join(errors))
 
 
+def _fetch_sw_history_raw(symbol: str) -> pd.DataFrame:
+    original_get = requests.get
+
+    def get_with_default_timeout(*args, **kwargs):
+        kwargs.setdefault("timeout", SW_FETCH_TIMEOUT_SECONDS)
+        return original_get(*args, **kwargs)
+
+    requests.get = get_with_default_timeout
+    try:
+        return ak.index_hist_sw(symbol=symbol, period="day")
+    finally:
+        requests.get = original_get
+
+
 def _fetch_histories(extra_days: int = 180) -> Dict[str, pd.DataFrame]:
     histories: Dict[str, pd.DataFrame] = {}
+    failures: list[str] = []
     fetch_days = LOOKBACK_DAYS + WARMUP_DAYS + extra_days
+    min_rows = LOOKBACK_DAYS + WARMUP_DAYS
     for name, symbol in SW_CODE_MAPPING.items():
-        try:
-            raw = ak.index_hist_sw(symbol=symbol, period="day")
-            hist = _normalize_sw_history(raw).tail(fetch_days).reset_index(drop=True)
-            if len(hist) >= LOOKBACK_DAYS + WARMUP_DAYS:
-                histories[name] = hist
-        except Exception:
-            continue
+        last_error = ""
+        for attempt in range(1, SW_FETCH_RETRIES + 1):
+            try:
+                raw = _fetch_sw_history_raw(symbol)
+                hist = _normalize_sw_history(raw).tail(fetch_days).reset_index(drop=True)
+                if len(hist) >= min_rows:
+                    histories[name] = hist
+                    break
+                raw_shape = getattr(raw, "shape", "unknown")
+                raw_columns = list(raw.columns) if hasattr(raw, "columns") else []
+                last_error = f"normalized rows {len(hist)} < {min_rows}; raw_shape={raw_shape}; columns={raw_columns}"
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+            if attempt < SW_FETCH_RETRIES:
+                _log_sw_fetch(f"{name}({symbol}) attempt {attempt}/{SW_FETCH_RETRIES} failed: {last_error}; retrying")
+                if SW_FETCH_RETRY_SLEEP_SECONDS > 0:
+                    time.sleep(SW_FETCH_RETRY_SLEEP_SECONDS)
+        else:
+            failures.append(f"{name}({symbol}): {last_error}")
+    if failures:
+        _log_sw_fetch(
+            f"fetched {len(histories)}/{len(SW_CODE_MAPPING)} sectors; "
+            f"timeout={SW_FETCH_TIMEOUT_SECONDS}s retries={SW_FETCH_RETRIES}"
+        )
+        for failure in failures[:10]:
+            _log_sw_fetch(f"failure: {failure}")
+        if len(failures) > 10:
+            _log_sw_fetch(f"... {len(failures) - 10} more failures")
     return histories
 
 
