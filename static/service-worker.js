@@ -1,7 +1,6 @@
-const CACHE_NAME = "a-share-five-layer-v2";
+const CACHE_NAME = "a-share-five-layer-v3";
 const ICON_VERSION = "20260619-light-logo-v2";
 const CORE_ASSETS = [
-  "/",
   `/app/static/manifest.webmanifest?v=${ICON_VERSION}`,
   `/app/static/icon-180.png?v=${ICON_VERSION}`,
   `/app/static/icon-192.png?v=${ICON_VERSION}`,
@@ -28,7 +27,18 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
-  );
+
+  if (event.request.mode === "navigate") {
+    event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+    return;
+  }
+
+  const url = new URL(event.request.url);
+  const isVersionedStaticAsset = url.pathname.startsWith("/app/static/") && url.searchParams.has("v");
+  if (isVersionedStaticAsset) {
+    event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
+    return;
+  }
+
+  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
 });
