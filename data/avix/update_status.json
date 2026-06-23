@@ -1,0 +1,29 @@
+{
+  "status": "ready",
+  "reason": "AVIX 缓存更新成功",
+  "updated_at": "2026-06-23 09:38:58",
+  "latest": {
+    "valuation_time": "2026-06-23 09:38:20",
+    "trade_date": "2026-06-23",
+    "avix": 23.5134,
+    "var30": 0.0552880754155576,
+    "near_expiry": "2026-07-17",
+    "next_expiry": "2026-08-21",
+    "near_dte": 24,
+    "next_dte": 59,
+    "near_var": 0.0578174493384798,
+    "next_var": 0.050315069058626,
+    "near_forward": 5018.91766758413,
+    "next_forward": 5005.913609215155,
+    "near_k0": 5000.0,
+    "next_k0": 5000.0,
+    "near_n_options": 23,
+    "next_n_options": 22,
+    "near_rate": 0.01421,
+    "next_rate": 0.0142535,
+    "quality": "OK",
+    "note": "正常双期限插值",
+    "source": "CLOSE_MID"
+  },
+  "signal_latest_trade_date": ""
+}
