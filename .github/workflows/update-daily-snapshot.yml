@@ -46,9 +46,9 @@ jobs:
       - name: Update snapshot
         run: |
           if [ -n "${{ inputs.target_date }}" ]; then
-            python scripts/update_daily_snapshot.py --target-date "${{ inputs.target_date }}" --force
+            python scripts/update_daily_snapshot.py --target-date "${{ inputs.target_date }}" --force --skip-avix
           else
-            python scripts/update_daily_snapshot.py --force
+            python scripts/update_daily_snapshot.py --force --skip-avix
           fi
 
       - name: Build live recommendation ledger
