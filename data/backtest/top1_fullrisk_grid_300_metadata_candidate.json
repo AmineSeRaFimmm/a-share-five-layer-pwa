@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-26 00:45:36",
+  "generated_at": "2026-06-26 21:32:25",
   "status": "ready",
   "update_mode": "promote",
   "promoted": true,
@@ -9,8 +9,8 @@
   "lookback_days": 300,
   "warmup_days": 90,
   "min_sectors_per_day": 20,
-  "first_trade_date": "2025-03-28",
-  "last_trade_date": "2026-06-24",
+  "first_trade_date": "2025-03-31",
+  "last_trade_date": "2026-06-25",
   "observed_trade_days": 300,
   "observed_sectors": 31,
   "grid_size": 384,
