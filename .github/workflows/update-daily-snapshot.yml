@@ -44,8 +44,9 @@ jobs:
       - name: Diagnose SW component raw response
         run: |
           python - <<'PY'
-          import json, requests, pandas as pd
+          import json, requests, pandas as pd, urllib3
           import akshare as ak
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
           print('akshare version:', getattr(ak, '__version__', '<none>'))
           print('has index_stock_cons_sw:', hasattr(ak, 'index_stock_cons_sw'))
           print('has index_component_sw:', hasattr(ak, 'index_component_sw'))
@@ -55,7 +56,7 @@ jobs:
               print('=' * 80)
               print('swindexcode:', code)
               try:
-                  r = requests.get(url, params={'swindexcode': code, 'page': '1', 'page_size': '10000'}, headers=headers, timeout=20)
+                  r = requests.get(url, params={'swindexcode': code, 'page': '1', 'page_size': '10000'}, headers=headers, timeout=20, verify=False)
                   print('status:', r.status_code)
                   print('content-type:', r.headers.get('content-type'))
                   print('text head:', r.text[:500])
