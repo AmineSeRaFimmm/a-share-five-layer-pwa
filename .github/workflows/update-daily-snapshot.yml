@@ -39,7 +39,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Trace SW frontend component parameters
+      - name: Trace SW component service callers
         run: |
           python - <<'PY'
           import re, requests, urllib3
@@ -47,46 +47,95 @@ jobs:
           S=requests.Session()
           S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://www.swsresearch.com/','Accept':'text/html,application/json,text/plain,*/*'})
           js_url='https://www.swsresearch.com/institute_sw/umi.js'
-          print('## FETCH UMI')
-          r=S.get(js_url,timeout=30,verify=False)
-          print('status',r.status_code,'len',len(r.text),'ctype',r.headers.get('content-type'))
+          r=S.get(js_url,timeout=40,verify=False)
           t=r.text
-          print('tail',t[-500:])
-          print('\n## API STRING LIST')
-          endpoints=sorted(set(re.findall(r'["\'](/api/index_publish/[^"\']+?)["\']',t)))
-          for ep in endpoints:
-              print('API',ep)
-          print('endpoint_count',len(endpoints))
-          print('\n## COMPONENT_STOCKS CONTEXTS')
-          for i,m in enumerate(re.finditer('component_stocks',t)):
-              pos=m.start()
-              ctx=t[max(0,pos-5000):pos+5000]
-              ctx=re.sub(r'\s+',' ',ctx)
-              print('COMPONENT_CONTEXT',i,'pos',pos)
-              print(ctx[:9000])
-          print('\n## DETAILS ROUTE / QUERY CONTEXTS')
-          terms=['component_stocks','swindexcode','swIndexCode','指数成分','成分股','indexPublish','index_publish','historyData','selectedRows','changePage']
-          for term in terms:
+          print('UMI status',r.status_code,'len',len(t))
+
+          mod_re=re.compile(r'(?P<id>[A-Za-z0-9+/]+):function\(e,t,n\)\{')
+          mods=[]
+          for m in mod_re.finditer(t):
+              mods.append((m.group('id'),m.start(),m.end()))
+          intervals=[]
+          for i,(mid,start,end) in enumerate(mods):
+              stop=mods[i+1][1] if i+1<len(mods) else len(t)
+              intervals.append((mid,start,stop,t[start:stop]))
+          print('MODULE_COUNT',len(intervals))
+
+          service=None
+          for mid,start,stop,body in intervals:
+              if '/api/index_publish/details/component_stocks/' in body:
+                  service=(mid,start,stop,body)
+                  break
+          if not service:
+              print('SERVICE_MODULE_NOT_FOUND')
+              raise SystemExit(1)
+          mid,start,stop,body=service
+          print('\n## SERVICE MODULE')
+          print('SERVICE_ID',mid,'start',start,'stop',stop,'len',len(body))
+          print('SERVICE_HEAD',re.sub(r'\s+',' ',body[:3500]))
+
+          export_map=re.findall(r'n\.d\(t,"([^"]+)",\(function\(\)\{return ([A-Za-z_$][\w$]*)\}\)\)',body)
+          print('\n## EXPORT MAP')
+          for alias,local in export_map:
+              print('EXPORT',alias,'=>',local)
+
+          endpoint_hits=[]
+          for m in re.finditer(r'Object\([^\)]*\)\("(/api/index_publish/[^"]+)"\s*,\s*t\)',body):
+              ep=m.group(1); pos=m.start()
+              ctx=body[max(0,pos-1200):pos+900]
+              ctx_comp=re.sub(r'\s+',' ',ctx)
+              endpoint_hits.append((ep,pos,ctx_comp))
+              print('\nENDPOINT_HIT',ep,'pos',pos)
+              print(ctx_comp[:2200])
+
+          comp_locals=set()
+          comp_pos=body.find('/api/index_publish/details/component_stocks/')
+          ctx=body[max(0,comp_pos-1500):comp_pos+1500]
+          for wrapper,inner in re.findall(r'function ([A-Za-z_$][\w$]*)\(e\)\{return ([A-Za-z_$][\w$]*)\.apply\(this,arguments\)\}',ctx):
+              comp_locals.add(wrapper)
+          for fn in re.findall(r'function ([A-Za-z_$][\w$]*)\(\)\{return [A-Za-z_$][\w$]*=Object',ctx):
+              comp_locals.add(fn)
+          print('\n## COMPONENT LOCAL CANDIDATES',sorted(comp_locals))
+          comp_aliases=[alias for alias,local in export_map if local in comp_locals]
+          print('## COMPONENT EXPORT ALIASES',comp_aliases)
+
+          print('\n## IMPORTERS AND CALL SITES')
+          if not comp_aliases:
+              print('NO_COMPONENT_ALIAS_FOUND')
+          for imid,istart,istop,ibody in intervals:
+              if imid==mid:
+                  continue
+              if ('n("'+mid+'")' not in ibody) and ("n('"+mid+"')" not in ibody) and (mid not in ibody[:5000]):
+                  continue
+              found=False
+              for alias in comp_aliases:
+                  patterns=[r'\["'+re.escape(alias)+r'"\]', r'\.'+re.escape(alias)+r'\b']
+                  for pat in patterns:
+                      for m in re.finditer(pat,ibody):
+                          if not found:
+                              print('\nIMPORTER_MODULE',imid,'start',istart,'len',len(ibody))
+                              imports=re.findall(r'([A-Za-z_$][\w$]*)\s*=\s*n\("'+re.escape(mid)+r'"\)',ibody)
+                              print('IMPORT_VARS',imports)
+                              found=True
+                          pos=m.start()
+                          ctx=ibody[max(0,pos-2200):pos+2600]
+                          ctx=re.sub(r'\s+',' ',ctx)
+                          print('CALL_ALIAS',alias,'pos',pos)
+                          print(ctx[:4500])
+                          break
+                  if found:
+                      break
+
+          print('\n## ROUTE/DETAIL CONTEXTS')
+          for term in ['component_stocks','sw_index','timelines','index_spread','currentTab','params','location','query','search','pathname','indexCode','index_code','id:','indexid','indexId']:
               positions=[m.start() for m in re.finditer(re.escape(term),t)]
-              print('TERM',term,'count',len(positions),'positions',positions[:20])
-              for pos in positions[:3]:
-                  ctx=t[max(0,pos-1200):pos+1600]
-                  ctx=re.sub(r'\s+',' ',ctx)
-                  print('TERM_CTX',term,pos,ctx[:2500])
-          print('\n## SOURCE MAP PROBE')
-          m=re.search(r'sourceMappingURL=([^\s]+)',t[-2000:])
-          print('sourceMappingURL',m.group(1) if m else None)
-          if m:
-              sm_url=requests.compat.urljoin(js_url,m.group(1))
-              try:
-                  rr=S.get(sm_url,timeout=30,verify=False)
-                  print('sourcemap status',rr.status_code,'len',len(rr.text),'head',rr.text[:300])
-                  for term in ['component_stocks','swindexcode','swIndexCode','成分股']:
-                      print('sourcemap term',term,'pos',rr.text.find(term))
-              except Exception as e:
-                  print('sourcemap error',type(e).__name__,repr(e))
+              if positions:
+                  print('TERM',term,'count',len(positions),'first_positions',positions[:10])
+                  for pos in positions[:2]:
+                      ctx=t[max(0,pos-900):pos+1200]
+                      print('TERM_CTX',term,pos,re.sub(r'\s+',' ',ctx)[:2000])
           PY
-          echo "Trace complete; stopping before snapshot/update/commit."
+          echo "Trace callers complete; stopping before snapshot/update/commit."
           exit 1
 
       - name: Update snapshot
