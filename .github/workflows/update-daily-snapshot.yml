@@ -39,7 +39,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Fetch hashed SW release detail chunks
+      - name: Search SW component stock table payloads
         run: |
           python - <<'PY'
           import re, requests, urllib3
@@ -48,70 +48,47 @@ jobs:
           S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://www.swsresearch.com/','Accept':'text/html,application/javascript,text/plain,*/*'})
           base='https://www.swsresearch.com/institute_sw/'
           umi=S.get(base+'umi.js',timeout=40,verify=False).text
-          print('UMI_LEN',len(umi))
-
-          pos=umi.find('function o(e){return')
-          print('LOADER_POS',pos)
-          if pos >= 0:
-              print('LOADER_CTX',re.sub(r'\s+',' ',umi[pos:pos+7000])[:7000])
-
+          loader=umi[umi.find('function o(e){return'):umi.find('function o(e){return')+12000]
           maps=[]
-          if pos >= 0:
-              s=umi[pos:pos+12000]
-              for raw in re.findall(r'\{\d+:"[^"]+"(?:,\d+:"[^"]+")*\}',s):
-                  d={int(k):v for k,v in re.findall(r'(\d+):"([^"]+)"',raw)}
-                  maps.append(d)
-          print('MAP_COUNT',len(maps))
-          for i,d in enumerate(maps[:4]):
-              print('MAP',i,'size',len(d),'sample',list(sorted(d.items()))[:5])
-
+          for raw in re.findall(r'\{\d+:"[^"]+"(?:,\d+:"[^"]+")*\}',loader):
+              maps.append({int(k):v for k,v in re.findall(r'(\d+):"([^"]+)"',raw)})
           name_map=maps[0] if maps else {}
-          hash_map={}
-          for d in maps[1:]:
-              if d and all(re.fullmatch(r'[0-9a-f]{6,32}',v) for v in list(d.values())[:10]):
-                  hash_map=d; break
-          print('NAME_MAP_SIZE',len(name_map),'HASH_MAP_SIZE',len(hash_map))
-
-          target_ids=[5,6,17,18,19,20,21,56]
-          targets=[]
+          target_ids=[17,20,21,5,6,56]
+          terms=['componentStockPageList','componentStockPageListexportExc','componentDLFGPageList','componentDLFGPageListexportExc','monthEndComponentWeight','stockcode','stockname','newweight','beginningdate','declaredate','swindexcode','swIndexCode','indexCode','page_size','totalAccount','RELEASEDINDEX/detailStocks','detailStocks','/api/index_publish/details/component_stocks/']
           for k in target_ids:
               name=name_map.get(k)
-              h=hash_map.get(k)
-              if name:
-                  urls=[]
-                  if h:
-                      urls.append(base+name+'.'+h+'.async.js')
-                  urls.extend([base+name+'.async.js', base+name+'.js'])
-                  targets.append((k,name,h,urls))
-          for k,name,h,urls in targets:
-              print('\n## TARGET',k,name,'hash',h)
+              if not name:
+                  continue
+              print('\n## TARGET',k,name)
               text=None; got=None
-              for url in urls:
-                  try:
-                      r=S.get(url,timeout=40,verify=False)
-                      print('TRY',url,'status',r.status_code,'len',len(r.text),'ctype',r.headers.get('content-type'),'head',r.text[:80].replace('\n',' '))
-                      if r.status_code==200 and 'javascript' in str(r.headers.get('content-type','')).lower() and len(r.text)>1000:
-                          text=r.text; got=url; break
-                  except Exception as e:
-                      print('TRY_ERROR',url,type(e).__name__,repr(e))
+              for url in [base+name+'.js', base+name+'.async.js']:
+                  r=S.get(url,timeout=40,verify=False)
+                  print('TRY',url,'status',r.status_code,'len',len(r.text),'ctype',r.headers.get('content-type'),'head',r.text[:80].replace('\n',' '))
+                  if r.status_code==200 and 'javascript' in str(r.headers.get('content-type','')).lower() and len(r.text)>1000:
+                      text=r.text; got=url; break
               if not text:
-                  print('NO_REAL_JS_FOR_TARGET')
+                  print('NO_REAL_JS')
                   continue
               print('GOT_JS',got,'LEN',len(text))
-              terms=['detailStocks','RELEASEDINDEX/detailStocks','component_stocks','swindexcode','indexCode','index_code','indexid','indexId','payload','dispatch','page_size','pageSize','detailAnnounce','detailTrend','detailTimelines','swIndexCode']
               for term in terms:
                   positions=[m.start() for m in re.finditer(re.escape(term),text)]
                   if positions:
-                      print('TERM',term,'count',len(positions),'positions',positions[:20])
-                      for p in positions[:4]:
-                          ctx=text[max(0,p-2200):p+3000]
-                          print('CTX',term,p,re.sub(r'\s+',' ',ctx)[:5000])
-              print('\n## DISPATCHES')
-              for mm in re.finditer(r'type:"RELEASEDINDEX/[^"]+"',text):
-                  p=mm.start(); ctx=text[max(0,p-2600):p+3600]
-                  print('DISPATCH_AT',p,re.sub(r'\s+',' ',ctx)[:6000])
+                      print('\nTERM',term,'count',len(positions),'positions',positions[:30])
+                      for p in positions[:6]:
+                          ctx=text[max(0,p-3500):p+5000]
+                          print('CTX',term,p,re.sub(r'\s+',' ',ctx)[:8000])
+              print('\n## RELEASEDINDEX DISPATCHES WITH COMPONENT/STOCK/SWINDEX')
+              for m in re.finditer(r'type:"RELEASEDINDEX/[^"]+"',text):
+                  p=m.start(); ctx=text[max(0,p-2500):p+3500]; compact=re.sub(r'\s+',' ',ctx)
+                  if any(x in compact for x in ['component','Component','Stock','stock','swindexcode','swIndexCode','indexCode','page_size']):
+                      print('DISPATCH_AT',p,compact[:6000])
+              print('\n## TABLE CANDIDATES')
+              for m in re.finditer(r'totalAccount|pageChange|changeTable|columns:',text):
+                  p=m.start(); ctx=text[max(0,p-2600):p+3400]; compact=re.sub(r'\s+',' ',ctx)
+                  if any(x in compact for x in ['stockcode','stockname','newweight','beginningdate','swindexcode','indexCode','RELEASEDINDEX']):
+                      print('TABLE_CTX_AT',p,compact[:6000])
           PY
-          echo "Hashed chunk trace complete; stopping before snapshot/update/commit."
+          echo "Component table payload search complete; stopping before snapshot/update/commit."
           exit 1
 
       - name: Update snapshot
