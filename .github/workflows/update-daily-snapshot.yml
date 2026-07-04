@@ -39,49 +39,65 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Trace SW componentStockPageList service mapping
+      - name: Retry fallback SW service mapping trace
         run: |
           python - <<'PY'
-          import re
-          import requests
-          import urllib3
+          import re, time, requests, urllib3
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-          text = requests.get('https://www.swsresearch.com/institute_sw/umi.js', timeout=40, verify=False, headers={'User-Agent':'Mozilla/5.0'}).text
-          print('UMI_LEN', len(text))
-          module_marks = [(m.group(1), m.start()) for m in re.finditer(r'([A-Za-z0-9+/]+):function\(e,t,n\)\{', text)]
-          modules = []
-          for i, item in enumerate(module_marks):
-              module_id, start = item
-              stop = module_marks[i+1][1] if i + 1 < len(module_marks) else len(text)
-              body = text[start:stop]
-              modules.append((module_id, body))
-          service_body = ''
-          model_body = ''
-          for module_id, body in modules:
-              if '/api/index_publish/details/component_stocks/' in body:
-                  print('SERVICE_MODULE', module_id, 'LEN', len(body))
-                  service_body = body
-              if 'namespace:"RELEASEDINDEX"' in body:
-                  print('MODEL_MODULE', module_id, 'LEN', len(body))
-                  model_body = body
-          print('\n## MODEL ACTIONS')
-          for action in ['componentStockPageList','componentDLFGPageList','componentStockPageListexportExc','componentDLFGPageListexportExc','announcementPageList','broadDetails']:
-              pos = model_body.find(action)
-              print('ACTION', action, 'POS', pos)
-              if pos >= 0:
-                  ctx = re.sub(r'\s+', ' ', model_body[max(0, pos-700):pos+1800])
-                  print(ctx[:2500])
-          print('\n## SERVICE CONTEXTS')
-          for term in ['componentStockPageList','componentDLFGPageList','component_stocks','component','PageList','swIndex','index']:
-              positions = [m.start() for m in re.finditer(re.escape(term), service_body)]
-              print('TERM', term, 'COUNT', len(positions), 'POSITIONS', positions[:20])
-              for pos in positions[:3]:
-                  ctx = re.sub(r'\s+', ' ', service_body[max(0, pos-1000):pos+1800])
-                  print('CTX', term, pos, ctx[:2500])
-          print('\n## SERVICE EXPORT HEAD')
-          print(re.sub(r'\s+', ' ', service_body[:9000])[:9000])
+          S=requests.Session()
+          S.headers.update({'User-Agent':'Mozilla/5.0','Accept':'application/javascript,text/plain,*/*','Referer':'https://www.swsresearch.com/institute_sw/'})
+          def fetch(url):
+              for i in range(1,5):
+                  try:
+                      r=S.get(url,timeout=(10,80),verify=False)
+                      print('FETCH',url,'try',i,'status',r.status_code,'len',len(r.text),'ctype',r.headers.get('content-type'))
+                      if r.status_code==200 and len(r.text)>1000:
+                          return r.text
+                  except Exception as e:
+                      print('FETCH_ERROR',url,'try',i,type(e).__name__,repr(e))
+                      time.sleep(i*2)
+              return ''
+          umi=fetch('https://www.swsresearch.com/institute_sw/umi.js')
+          chunk=fetch('https://www.swsresearch.com/institute_sw/p__allIndex__releasedIndex__releaseDetail__index.js')
+          print('UMI_OK',bool(umi),'CHUNK_OK',bool(chunk))
+          print('\n## CHUNK CONFIRMED PAGE PAYLOAD')
+          for term in ['componentStockPageList','componentStockPageListexportExc','downLoadDetail','spreadNum','detailAnnounce']:
+              if chunk:
+                  positions=[m.start() for m in re.finditer(re.escape(term),chunk)]
+                  print('CHUNK_TERM',term,'COUNT',len(positions),'POS',positions[:10])
+                  for pos in positions[:2]:
+                      print(re.sub(r'\s+',' ',chunk[max(0,pos-1000):pos+1800])[:2600])
+          if umi:
+              module_marks=[(m.group(1),m.start()) for m in re.finditer(r'([A-Za-z0-9+/]+):function\(e,t,n\)\{',umi)]
+              modules=[]
+              for idx,(mid,start) in enumerate(module_marks):
+                  stop=module_marks[idx+1][1] if idx+1<len(module_marks) else len(umi)
+                  modules.append((mid,umi[start:stop]))
+              service=''; model=''
+              for mid,body in modules:
+                  if '/api/index_publish/details/component_stocks/' in body or '/insWechatSw/swIndex/' in body:
+                      if '/api/index_publish/details/component_stocks/' in body:
+                          print('SERVICE_MODULE_CANDIDATE',mid,'LEN',len(body))
+                          service=body
+                  if 'namespace:"RELEASEDINDEX"' in body:
+                      print('MODEL_MODULE',mid,'LEN',len(body))
+                      model=body
+              print('\n## MODEL ACTION CONTEXTS')
+              for action in ['componentStockPageList','componentStockPageListexportExc','downLoadDetail','spreadNum','detailAnnounce']:
+                  pos=model.find(action)
+                  print('MODEL_ACTION',action,'POS',pos)
+                  if pos>=0:
+                      print(re.sub(r'\s+',' ',model[max(0,pos-800):pos+2200])[:3000])
+              print('\n## SERVICE ENDPOINT CONTEXTS')
+              for term in ['/insWechatSw/swIndex/','componentStock','PageList','component_stocks','downLoadDetail']:
+                  positions=[m.start() for m in re.finditer(re.escape(term),service)]
+                  print('SERVICE_TERM',term,'COUNT',len(positions),'POS',positions[:20])
+                  for pos in positions[:5]:
+                      print(re.sub(r'\s+',' ',service[max(0,pos-1100):pos+1600])[:2600])
+              print('\n## SERVICE_HEAD_14000')
+              print(re.sub(r'\s+',' ',service[:14000])[:14000])
           PY
-          echo "Service mapping trace complete; stopping before snapshot/update/commit."
+          echo "Retry fallback trace complete; stopping before snapshot/update/commit."
           exit 1
 
       - name: Update snapshot
