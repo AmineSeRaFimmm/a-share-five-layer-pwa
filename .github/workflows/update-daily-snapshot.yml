@@ -41,6 +41,50 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Diagnose SW component raw response
+        run: |
+          python - <<'PY'
+          import json, requests, pandas as pd
+          import akshare as ak
+          print('akshare version:', getattr(ak, '__version__', '<none>'))
+          print('has index_stock_cons_sw:', hasattr(ak, 'index_stock_cons_sw'))
+          print('has index_component_sw:', hasattr(ak, 'index_component_sw'))
+          url = 'https://www.swsresearch.com/institute-sw/api/index_publish/details/component_stocks/'
+          headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.swsresearch.com/', 'Accept': 'application/json,text/plain,*/*'}
+          for code in ['801010', '801030', '801080', '801150', '801780']:
+              print('=' * 80)
+              print('swindexcode:', code)
+              try:
+                  r = requests.get(url, params={'swindexcode': code, 'page': '1', 'page_size': '10000'}, headers=headers, timeout=20)
+                  print('status:', r.status_code)
+                  print('content-type:', r.headers.get('content-type'))
+                  print('text head:', r.text[:500])
+                  data = r.json()
+                  inner = data.get('data') if isinstance(data, dict) else None
+                  results = inner.get('results') if isinstance(inner, dict) else None
+                  print('data keys:', list(inner.keys()) if isinstance(inner, dict) else None)
+                  print('results len:', len(results) if hasattr(results, '__len__') else None)
+                  if results:
+                      df = pd.DataFrame(results)
+                      print('RAW COLUMNS:', list(df.columns))
+                      print('FIRST ROW:', json.dumps(results[0], ensure_ascii=False)[:1200])
+                  else:
+                      print('RAW COLUMNS: <NO RESULTS>')
+              except Exception as e:
+                  print('ERROR:', type(e).__name__, repr(e))
+          for code in ['801010', '801030']:
+              print('=' * 80)
+              print('ak.index_component_sw:', code)
+              try:
+                  df = ak.index_component_sw(symbol=code)
+                  print('rows:', len(df))
+                  print('columns:', list(df.columns))
+              except Exception as e:
+                  print('AKSHARE ERROR:', type(e).__name__, repr(e))
+          PY
+          echo "Diagnostic complete; stopping before snapshot/update/commit."
+          exit 1
+
       - name: Update snapshot
         run: |
           if [ -n "${{ inputs.target_date }}" ]; then
