@@ -39,7 +39,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Trace SW release detail chunk payloads
+      - name: Fetch hashed SW release detail chunks
         run: |
           python - <<'PY'
           import re, requests, urllib3
@@ -49,58 +49,69 @@ jobs:
           base='https://www.swsresearch.com/institute_sw/'
           umi=S.get(base+'umi.js',timeout=40,verify=False).text
           print('UMI_LEN',len(umi))
-          chunk_map={}
-          m=re.search(r'\{0:"vendors.*?\}',umi)
-          if m:
-              raw=m.group(0)
-              for k,v in re.findall(r'(\d+):"([^"]+)"',raw):
-                  chunk_map[int(k)]=v
-          print('CHUNK_COUNT',len(chunk_map))
-          for k,v in sorted(chunk_map.items()):
-              if 'releaseDetail' in v or 'releasedIndex' in v or k in [20,21,17,18,19]:
-                  print('CHUNK',k,v)
-          targets=[(k,v) for k,v in sorted(chunk_map.items()) if ('releaseDetail' in v or 'releasedIndex' in v or k in [20,21,17,18,19])]
-          exts=['.async.js','.js']
-          terms=['detailStocks','RELEASEDINDEX/detailStocks','component_stocks','swindexcode','indexCode','index_code','indexid','indexId','payload','dispatch','page_size','pageSize','detailAnnounce','detailTrend','detailTimelines']
-          for k,name in targets:
-              print('\n## FETCH_CHUNK',k,name)
+
+          pos=umi.find('function o(e){return')
+          print('LOADER_POS',pos)
+          if pos >= 0:
+              print('LOADER_CTX',re.sub(r'\s+',' ',umi[pos:pos+7000])[:7000])
+
+          maps=[]
+          if pos >= 0:
+              s=umi[pos:pos+12000]
+              for raw in re.findall(r'\{\d+:"[^"]+"(?:,\d+:"[^"]+")*\}',s):
+                  d={int(k):v for k,v in re.findall(r'(\d+):"([^"]+)"',raw)}
+                  maps.append(d)
+          print('MAP_COUNT',len(maps))
+          for i,d in enumerate(maps[:4]):
+              print('MAP',i,'size',len(d),'sample',list(sorted(d.items()))[:5])
+
+          name_map=maps[0] if maps else {}
+          hash_map={}
+          for d in maps[1:]:
+              if d and all(re.fullmatch(r'[0-9a-f]{6,32}',v) for v in list(d.values())[:10]):
+                  hash_map=d; break
+          print('NAME_MAP_SIZE',len(name_map),'HASH_MAP_SIZE',len(hash_map))
+
+          target_ids=[5,6,17,18,19,20,21,56]
+          targets=[]
+          for k in target_ids:
+              name=name_map.get(k)
+              h=hash_map.get(k)
+              if name:
+                  urls=[]
+                  if h:
+                      urls.append(base+name+'.'+h+'.async.js')
+                  urls.extend([base+name+'.async.js', base+name+'.js'])
+                  targets.append((k,name,h,urls))
+          for k,name,h,urls in targets:
+              print('\n## TARGET',k,name,'hash',h)
               text=None; got=None
-              for ext in exts:
-                  url=base+name+ext
+              for url in urls:
                   try:
                       r=S.get(url,timeout=40,verify=False)
-                      print('TRY',url,'status',r.status_code,'len',len(r.text),'ctype',r.headers.get('content-type'))
-                      if r.status_code==200 and len(r.text)>500:
+                      print('TRY',url,'status',r.status_code,'len',len(r.text),'ctype',r.headers.get('content-type'),'head',r.text[:80].replace('\n',' '))
+                      if r.status_code==200 and 'javascript' in str(r.headers.get('content-type','')).lower() and len(r.text)>1000:
                           text=r.text; got=url; break
                   except Exception as e:
                       print('TRY_ERROR',url,type(e).__name__,repr(e))
               if not text:
+                  print('NO_REAL_JS_FOR_TARGET')
                   continue
-              print('GOT',got,'LEN',len(text))
-              found=False
+              print('GOT_JS',got,'LEN',len(text))
+              terms=['detailStocks','RELEASEDINDEX/detailStocks','component_stocks','swindexcode','indexCode','index_code','indexid','indexId','payload','dispatch','page_size','pageSize','detailAnnounce','detailTrend','detailTimelines','swIndexCode']
               for term in terms:
                   positions=[m.start() for m in re.finditer(re.escape(term),text)]
                   if positions:
-                      found=True
                       print('TERM',term,'count',len(positions),'positions',positions[:20])
-                      for pos in positions[:5]:
-                          ctx=text[max(0,pos-2000):pos+2600]
-                          ctx=re.sub(r'\s+',' ',ctx)
-                          print('CTX',term,pos,ctx[:4400])
-              if not found:
-                  print('NO_TERMS_FOUND')
-              print('\n## DISPATCH_CONTEXTS')
-              for m in re.finditer(r'type:"RELEASEDINDEX/[^"]+"',text):
-                  pos=m.start(); ctx=text[max(0,pos-2200):pos+3000]
-                  print('DISPATCH_AT',pos,re.sub(r'\s+',' ',ctx)[:5000])
-              print('\n## OBJECT_KEYS_NEAR_PAYLOAD')
-              for term in ['detailStocks','detailAnnounce','detailTrend','detailTimelines']:
-                  for mm in re.finditer(re.escape(term),text):
-                      pos=mm.start(); ctx=text[max(0,pos-3200):pos+4500]
-                      print('PAYLOAD_CTX_FOR',term,pos,re.sub(r'\s+',' ',ctx)[:7000])
-                      break
+                      for p in positions[:4]:
+                          ctx=text[max(0,p-2200):p+3000]
+                          print('CTX',term,p,re.sub(r'\s+',' ',ctx)[:5000])
+              print('\n## DISPATCHES')
+              for mm in re.finditer(r'type:"RELEASEDINDEX/[^"]+"',text):
+                  p=mm.start(); ctx=text[max(0,p-2600):p+3600]
+                  print('DISPATCH_AT',p,re.sub(r'\s+',' ',ctx)[:6000])
           PY
-          echo "Chunk trace complete; stopping before snapshot/update/commit."
+          echo "Hashed chunk trace complete; stopping before snapshot/update/commit."
           exit 1
 
       - name: Update snapshot
