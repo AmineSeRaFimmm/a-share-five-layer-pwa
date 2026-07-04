@@ -41,16 +41,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate and promote 300-day full-risk grid
-        run: |
-          python scripts/generate_fullrisk_grid_300.py --promote
-
       - name: Update snapshot
         run: |
           if [ -n "${{ inputs.target_date }}" ]; then
-            python scripts/update_daily_snapshot_production.py --target-date "${{ inputs.target_date }}" --force --skip-avix
+            python scripts/update_daily_snapshot_production.py --target-date "${{ inputs.target_date }}" --force --skip-avix --skip-backtest
           else
-            python scripts/update_daily_snapshot_production.py --force --skip-avix
+            python scripts/update_daily_snapshot_production.py --force --skip-avix --skip-backtest
           fi
 
       - name: Upload daily snapshot diagnostics
@@ -67,6 +63,20 @@ jobs:
       - name: Build live recommendation ledger
         run: |
           python scripts/update_live_recommendation_history.py
+
+      - name: Generate and promote 300-day full-risk grid
+        run: |
+          python scripts/generate_fullrisk_grid_300_production.py --promote
+
+      - name: Upload full-risk grid diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullrisk-grid-diagnostics
+          path: |
+            data/backtest/top1_fullrisk_grid_300_refresh_status.json
+            data/backtest/top1_fullrisk_grid_300_metadata.json
+          if-no-files-found: ignore
 
       - name: Commit data changes
         run: |
