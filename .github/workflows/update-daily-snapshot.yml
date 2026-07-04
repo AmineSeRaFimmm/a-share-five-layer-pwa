@@ -39,62 +39,54 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Validate SW component filtering
+      - name: Trace SW frontend component parameters
         run: |
           python - <<'PY'
-          import json, requests, urllib3
-          import pandas as pd
+          import re, requests, urllib3
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-          S = requests.Session()
-          S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://www.swsresearch.com/','Accept':'application/json,text/plain,*/*'})
-          base='https://www.swsresearch.com/institute-sw/api/index_publish/details/component_stocks/'
-          industries={'801010':'农林牧渔','801030':'基础化工','801080':'电子','801180':'房地产','801780':'银行'}
-          param_names=['swindexcode','swIndexCode','indexcode','indexCode','index_code','code','symbol']
-          print('## FILTER VALIDATION')
-          def fetch(params):
-              r=S.get(base,params=params,timeout=20,verify=False)
-              j=r.json()
-              d=j.get('data') if isinstance(j,dict) else None
-              res=d.get('results') if isinstance(d,dict) else None
-              count=d.get('count') if isinstance(d,dict) else None
-              rows=[] if not res else res
-              codes=[str(x.get('stockcode')) for x in rows[:20] if isinstance(x,dict)]
-              names=[str(x.get('stockname')) for x in rows[:20] if isinstance(x,dict)]
-              return r.url, count, len(rows), codes, names, rows[:3]
-          print('\n## NO FILTER BASELINE')
-          try:
-              url,count,n,codes,names,rows=fetch({'page':'1','page_size':'20'})
-              print('NO_PARAM_URL',url)
-              print('NO_PARAM_COUNT',count,'PAGE_ROWS',n)
-              print('NO_PARAM_CODES',codes)
-              print('NO_PARAM_NAMES',names)
-          except Exception as e:
-              print('NO_PARAM_ERROR',type(e).__name__,repr(e))
-          for pname in param_names:
-              print('\n## PARAM',pname)
-              sigs=[]
-              for code,label in industries.items():
-                  try:
-                      url,count,n,codes,names,rows=fetch({pname:code,'page':'1','page_size':'20'})
-                      sig='|'.join(codes[:10])
-                      sigs.append(sig)
-                      print('CASE',pname,code,label)
-                      print('URL',url)
-                      print('COUNT',count,'PAGE_ROWS',n)
-                      print('CODES',codes[:10])
-                      print('NAMES',names[:10])
-                      if rows:
-                          print('FIRST_ROW',json.dumps(rows[0],ensure_ascii=False)[:800])
-                  except Exception as e:
-                      print('CASE_ERROR',pname,code,label,type(e).__name__,repr(e))
-              unique=len(set(sigs))
-              print('SUMMARY',pname,'unique_signatures',unique,'of',len(sigs))
-              if unique == 1:
-                  print('CONCLUSION_FOR_PARAM',pname,': NOT_FILTERING_OR_SAME_PAGE_FOR_ALL_CODES')
-              else:
-                  print('CONCLUSION_FOR_PARAM',pname,': POSSIBLY_FILTERING')
+          S=requests.Session()
+          S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://www.swsresearch.com/','Accept':'text/html,application/json,text/plain,*/*'})
+          js_url='https://www.swsresearch.com/institute_sw/umi.js'
+          print('## FETCH UMI')
+          r=S.get(js_url,timeout=30,verify=False)
+          print('status',r.status_code,'len',len(r.text),'ctype',r.headers.get('content-type'))
+          t=r.text
+          print('tail',t[-500:])
+          print('\n## API STRING LIST')
+          endpoints=sorted(set(re.findall(r'["\'](/api/index_publish/[^"\']+?)["\']',t)))
+          for ep in endpoints:
+              print('API',ep)
+          print('endpoint_count',len(endpoints))
+          print('\n## COMPONENT_STOCKS CONTEXTS')
+          for i,m in enumerate(re.finditer('component_stocks',t)):
+              pos=m.start()
+              ctx=t[max(0,pos-5000):pos+5000]
+              ctx=re.sub(r'\s+',' ',ctx)
+              print('COMPONENT_CONTEXT',i,'pos',pos)
+              print(ctx[:9000])
+          print('\n## DETAILS ROUTE / QUERY CONTEXTS')
+          terms=['component_stocks','swindexcode','swIndexCode','指数成分','成分股','indexPublish','index_publish','historyData','selectedRows','changePage']
+          for term in terms:
+              positions=[m.start() for m in re.finditer(re.escape(term),t)]
+              print('TERM',term,'count',len(positions),'positions',positions[:20])
+              for pos in positions[:3]:
+                  ctx=t[max(0,pos-1200):pos+1600]
+                  ctx=re.sub(r'\s+',' ',ctx)
+                  print('TERM_CTX',term,pos,ctx[:2500])
+          print('\n## SOURCE MAP PROBE')
+          m=re.search(r'sourceMappingURL=([^\s]+)',t[-2000:])
+          print('sourceMappingURL',m.group(1) if m else None)
+          if m:
+              sm_url=requests.compat.urljoin(js_url,m.group(1))
+              try:
+                  rr=S.get(sm_url,timeout=30,verify=False)
+                  print('sourcemap status',rr.status_code,'len',len(rr.text),'head',rr.text[:300])
+                  for term in ['component_stocks','swindexcode','swIndexCode','成分股']:
+                      print('sourcemap term',term,'pos',rr.text.find(term))
+              except Exception as e:
+                  print('sourcemap error',type(e).__name__,repr(e))
           PY
-          echo "Validation complete; stopping before snapshot/update/commit."
+          echo "Trace complete; stopping before snapshot/update/commit."
           exit 1
 
       - name: Update snapshot
