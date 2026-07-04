@@ -39,68 +39,49 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Probe SW componentStockPageList endpoints
+      - name: Trace SW componentStockPageList service mapping
         run: |
           python - <<'PY'
-          import json, requests, urllib3
+          import re
+          import requests
+          import urllib3
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-          S=requests.Session()
-          S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://www.swsresearch.com/institute_sw/allIndex/releasedIndex/releasedetail?name=%E5%86%9C%E6%9E%97%E7%89%A7%E6%B8%94&code=801010','Accept':'application/json,text/plain,*/*','Content-Type':'application/json;charset=UTF-8'})
-          bases=['https://www.swsresearch.com','https://www.swsresearch.com/institute-sw']
-          actions=['componentStockPageList','componentDLFGPageList']
-          payloads={
-            'componentStockPageList': {'indexCode':'801010','pageNo':1,'pageSize':10},
-            'componentDLFGPageList': {'swIndexCode':'801010','pageNo':1,'pageSize':10,'indexType':2},
-          }
-          paths=[]
-          for action in actions:
-              paths.extend([
-                f'/insWechatSw/swIndex/{action}',
-                f'/api/insWechatSw/swIndex/{action}',
-                f'/api/index_publish/details/{action}/',
-                f'/index_publish/details/{action}/',
-              ])
-          methods=['GET','POST_JSON','POST_FORM']
-          print('## ENDPOINT PROBE')
-          for base in bases:
-              for path in paths:
-                  action=path.rstrip('/').split('/')[-1]
-                  data=payloads.get(action, {'indexCode':'801010','pageNo':1,'pageSize':10})
-                  for method in methods:
-                      url=base+path
-                      try:
-                          if method=='GET':
-                              r=S.get(url,params=data,timeout=25,verify=False)
-                          elif method=='POST_JSON':
-                              r=S.post(url,json=data,timeout=25,verify=False)
-                          else:
-                              r=S.post(url,data=data,headers={**S.headers,'Content-Type':'application/x-www-form-urlencoded'},timeout=25,verify=False)
-                          txt=r.text[:600].replace('\n',' ')
-                          is_json='application/json' in str(r.headers.get('content-type','')).lower() or txt.strip().startswith('{')
-                          count=None; keys=None; sample=None
-                          if is_json:
-                              try:
-                                  j=r.json(); keys=list(j.keys()) if isinstance(j,dict) else None
-                                  d=j.get('data') if isinstance(j,dict) else None
-                                  if isinstance(d,dict):
-                                      count=d.get('total') or d.get('count') or d.get('totalAccount') or d.get('totalElements')
-                                      arr=d.get('list') or d.get('results') or d.get('records') or d.get('data')
-                                      if isinstance(arr,list) and arr:
-                                          sample=json.dumps(arr[0],ensure_ascii=False)[:900]
-                                  elif isinstance(d,list) and d:
-                                      count=len(d); sample=json.dumps(d[0],ensure_ascii=False)[:900]
-                              except Exception as e:
-                                  sample='JSON_PARSE_ERROR '+repr(e)
-                          if r.status_code != 404 and (r.status_code != 200 or is_json or sample or 'component' in txt or 'stock' in txt or 'message' in txt):
-                              print('\nCASE',method,url)
-                              print('PAYLOAD',data)
-                              print('STATUS',r.status_code,'CTYPE',r.headers.get('content-type'),'LEN',len(r.text))
-                              print('HEAD',txt)
-                              print('JSON_KEYS',keys,'COUNT',count,'SAMPLE',sample)
-                      except Exception as e:
-                          print('\nERROR',method,url,type(e).__name__,repr(e))
+          text = requests.get('https://www.swsresearch.com/institute_sw/umi.js', timeout=40, verify=False, headers={'User-Agent':'Mozilla/5.0'}).text
+          print('UMI_LEN', len(text))
+          module_marks = [(m.group(1), m.start()) for m in re.finditer(r'([A-Za-z0-9+/]+):function\(e,t,n\)\{', text)]
+          modules = []
+          for i, item in enumerate(module_marks):
+              module_id, start = item
+              stop = module_marks[i+1][1] if i + 1 < len(module_marks) else len(text)
+              body = text[start:stop]
+              modules.append((module_id, body))
+          service_body = ''
+          model_body = ''
+          for module_id, body in modules:
+              if '/api/index_publish/details/component_stocks/' in body:
+                  print('SERVICE_MODULE', module_id, 'LEN', len(body))
+                  service_body = body
+              if 'namespace:"RELEASEDINDEX"' in body:
+                  print('MODEL_MODULE', module_id, 'LEN', len(body))
+                  model_body = body
+          print('\n## MODEL ACTIONS')
+          for action in ['componentStockPageList','componentDLFGPageList','componentStockPageListexportExc','componentDLFGPageListexportExc','announcementPageList','broadDetails']:
+              pos = model_body.find(action)
+              print('ACTION', action, 'POS', pos)
+              if pos >= 0:
+                  ctx = re.sub(r'\s+', ' ', model_body[max(0, pos-700):pos+1800])
+                  print(ctx[:2500])
+          print('\n## SERVICE CONTEXTS')
+          for term in ['componentStockPageList','componentDLFGPageList','component_stocks','component','PageList','swIndex','index']:
+              positions = [m.start() for m in re.finditer(re.escape(term), service_body)]
+              print('TERM', term, 'COUNT', len(positions), 'POSITIONS', positions[:20])
+              for pos in positions[:3]:
+                  ctx = re.sub(r'\s+', ' ', service_body[max(0, pos-1000):pos+1800])
+                  print('CTX', term, pos, ctx[:2500])
+          print('\n## SERVICE EXPORT HEAD')
+          print(re.sub(r'\s+', ' ', service_body[:9000])[:9000])
           PY
-          echo "Endpoint probe complete; stopping before snapshot/update/commit."
+          echo "Service mapping trace complete; stopping before snapshot/update/commit."
           exit 1
 
       - name: Update snapshot
