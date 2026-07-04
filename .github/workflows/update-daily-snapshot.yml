@@ -39,56 +39,68 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Search SW component stock table payloads
+      - name: Probe SW componentStockPageList endpoints
         run: |
           python - <<'PY'
-          import re, requests, urllib3
+          import json, requests, urllib3
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
           S=requests.Session()
-          S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://www.swsresearch.com/','Accept':'text/html,application/javascript,text/plain,*/*'})
-          base='https://www.swsresearch.com/institute_sw/'
-          umi=S.get(base+'umi.js',timeout=40,verify=False).text
-          loader=umi[umi.find('function o(e){return'):umi.find('function o(e){return')+12000]
-          maps=[]
-          for raw in re.findall(r'\{\d+:"[^"]+"(?:,\d+:"[^"]+")*\}',loader):
-              maps.append({int(k):v for k,v in re.findall(r'(\d+):"([^"]+)"',raw)})
-          name_map=maps[0] if maps else {}
-          target_ids=[17,20,21,5,6,56]
-          terms=['componentStockPageList','componentStockPageListexportExc','componentDLFGPageList','componentDLFGPageListexportExc','monthEndComponentWeight','stockcode','stockname','newweight','beginningdate','declaredate','swindexcode','swIndexCode','indexCode','page_size','totalAccount','RELEASEDINDEX/detailStocks','detailStocks','/api/index_publish/details/component_stocks/']
-          for k in target_ids:
-              name=name_map.get(k)
-              if not name:
-                  continue
-              print('\n## TARGET',k,name)
-              text=None; got=None
-              for url in [base+name+'.js', base+name+'.async.js']:
-                  r=S.get(url,timeout=40,verify=False)
-                  print('TRY',url,'status',r.status_code,'len',len(r.text),'ctype',r.headers.get('content-type'),'head',r.text[:80].replace('\n',' '))
-                  if r.status_code==200 and 'javascript' in str(r.headers.get('content-type','')).lower() and len(r.text)>1000:
-                      text=r.text; got=url; break
-              if not text:
-                  print('NO_REAL_JS')
-                  continue
-              print('GOT_JS',got,'LEN',len(text))
-              for term in terms:
-                  positions=[m.start() for m in re.finditer(re.escape(term),text)]
-                  if positions:
-                      print('\nTERM',term,'count',len(positions),'positions',positions[:30])
-                      for p in positions[:6]:
-                          ctx=text[max(0,p-3500):p+5000]
-                          print('CTX',term,p,re.sub(r'\s+',' ',ctx)[:8000])
-              print('\n## RELEASEDINDEX DISPATCHES WITH COMPONENT/STOCK/SWINDEX')
-              for m in re.finditer(r'type:"RELEASEDINDEX/[^"]+"',text):
-                  p=m.start(); ctx=text[max(0,p-2500):p+3500]; compact=re.sub(r'\s+',' ',ctx)
-                  if any(x in compact for x in ['component','Component','Stock','stock','swindexcode','swIndexCode','indexCode','page_size']):
-                      print('DISPATCH_AT',p,compact[:6000])
-              print('\n## TABLE CANDIDATES')
-              for m in re.finditer(r'totalAccount|pageChange|changeTable|columns:',text):
-                  p=m.start(); ctx=text[max(0,p-2600):p+3400]; compact=re.sub(r'\s+',' ',ctx)
-                  if any(x in compact for x in ['stockcode','stockname','newweight','beginningdate','swindexcode','indexCode','RELEASEDINDEX']):
-                      print('TABLE_CTX_AT',p,compact[:6000])
+          S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://www.swsresearch.com/institute_sw/allIndex/releasedIndex/releasedetail?name=%E5%86%9C%E6%9E%97%E7%89%A7%E6%B8%94&code=801010','Accept':'application/json,text/plain,*/*','Content-Type':'application/json;charset=UTF-8'})
+          bases=['https://www.swsresearch.com','https://www.swsresearch.com/institute-sw']
+          actions=['componentStockPageList','componentDLFGPageList']
+          payloads={
+            'componentStockPageList': {'indexCode':'801010','pageNo':1,'pageSize':10},
+            'componentDLFGPageList': {'swIndexCode':'801010','pageNo':1,'pageSize':10,'indexType':2},
+          }
+          paths=[]
+          for action in actions:
+              paths.extend([
+                f'/insWechatSw/swIndex/{action}',
+                f'/api/insWechatSw/swIndex/{action}',
+                f'/api/index_publish/details/{action}/',
+                f'/index_publish/details/{action}/',
+              ])
+          methods=['GET','POST_JSON','POST_FORM']
+          print('## ENDPOINT PROBE')
+          for base in bases:
+              for path in paths:
+                  action=path.rstrip('/').split('/')[-1]
+                  data=payloads.get(action, {'indexCode':'801010','pageNo':1,'pageSize':10})
+                  for method in methods:
+                      url=base+path
+                      try:
+                          if method=='GET':
+                              r=S.get(url,params=data,timeout=25,verify=False)
+                          elif method=='POST_JSON':
+                              r=S.post(url,json=data,timeout=25,verify=False)
+                          else:
+                              r=S.post(url,data=data,headers={**S.headers,'Content-Type':'application/x-www-form-urlencoded'},timeout=25,verify=False)
+                          txt=r.text[:600].replace('\n',' ')
+                          is_json='application/json' in str(r.headers.get('content-type','')).lower() or txt.strip().startswith('{')
+                          count=None; keys=None; sample=None
+                          if is_json:
+                              try:
+                                  j=r.json(); keys=list(j.keys()) if isinstance(j,dict) else None
+                                  d=j.get('data') if isinstance(j,dict) else None
+                                  if isinstance(d,dict):
+                                      count=d.get('total') or d.get('count') or d.get('totalAccount') or d.get('totalElements')
+                                      arr=d.get('list') or d.get('results') or d.get('records') or d.get('data')
+                                      if isinstance(arr,list) and arr:
+                                          sample=json.dumps(arr[0],ensure_ascii=False)[:900]
+                                  elif isinstance(d,list) and d:
+                                      count=len(d); sample=json.dumps(d[0],ensure_ascii=False)[:900]
+                              except Exception as e:
+                                  sample='JSON_PARSE_ERROR '+repr(e)
+                          if r.status_code != 404 and (r.status_code != 200 or is_json or sample or 'component' in txt or 'stock' in txt or 'message' in txt):
+                              print('\nCASE',method,url)
+                              print('PAYLOAD',data)
+                              print('STATUS',r.status_code,'CTYPE',r.headers.get('content-type'),'LEN',len(r.text))
+                              print('HEAD',txt)
+                              print('JSON_KEYS',keys,'COUNT',count,'SAMPLE',sample)
+                      except Exception as e:
+                          print('\nERROR',method,url,type(e).__name__,repr(e))
           PY
-          echo "Component table payload search complete; stopping before snapshot/update/commit."
+          echo "Endpoint probe complete; stopping before snapshot/update/commit."
           exit 1
 
       - name: Update snapshot
