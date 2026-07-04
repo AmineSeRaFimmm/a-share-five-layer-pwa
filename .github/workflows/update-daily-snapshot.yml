@@ -2,8 +2,6 @@ name: Update Daily Snapshot
 
 on:
   schedule:
-    # GitHub cron uses UTC. These runs map to Beijing time 19:20, 20:20, 21:20, 22:20.
-    # The first run starts after the script's 19:00 after-close cutoff; later runs catch delayed data sources.
     - cron: "20 11-14 * * 1-5"
   workflow_dispatch:
     inputs:
@@ -41,49 +39,80 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Diagnose SW component raw response
+      - name: Probe SW component sources
         run: |
           python - <<'PY'
-          import json, requests, pandas as pd, urllib3
+          import json, re, requests, urllib3
+          from urllib.parse import urljoin
+          import pandas as pd
           import akshare as ak
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+          S = requests.Session()
+          S.headers.update({'User-Agent':'Mozilla/5.0','Referer':'https://www.swsresearch.com/','Accept':'application/json,text/plain,*/*'})
           print('akshare version:', getattr(ak, '__version__', '<none>'))
           print('has index_stock_cons_sw:', hasattr(ak, 'index_stock_cons_sw'))
           print('has index_component_sw:', hasattr(ak, 'index_component_sw'))
-          url = 'https://www.swsresearch.com/institute-sw/api/index_publish/details/component_stocks/'
-          headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.swsresearch.com/', 'Accept': 'application/json,text/plain,*/*'}
-          for code in ['801010', '801030', '801080', '801150', '801780']:
-              print('=' * 80)
-              print('swindexcode:', code)
+          print('\n## FRONTEND ASSET SEARCH')
+          pages = ['https://www.swsresearch.com/institute_sw/home','https://www.swsresearch.com/institute_sw/index_publish','https://www.swsresearch.com/institute_sw/index_publish/details']
+          js_urls = []
+          for p in pages:
               try:
-                  r = requests.get(url, params={'swindexcode': code, 'page': '1', 'page_size': '10000'}, headers=headers, timeout=20, verify=False)
-                  print('status:', r.status_code)
-                  print('content-type:', r.headers.get('content-type'))
-                  print('text head:', r.text[:500])
-                  data = r.json()
-                  inner = data.get('data') if isinstance(data, dict) else None
-                  results = inner.get('results') if isinstance(inner, dict) else None
-                  print('data keys:', list(inner.keys()) if isinstance(inner, dict) else None)
-                  print('results len:', len(results) if hasattr(results, '__len__') else None)
-                  if results:
-                      df = pd.DataFrame(results)
-                      print('RAW COLUMNS:', list(df.columns))
-                      print('FIRST ROW:', json.dumps(results[0], ensure_ascii=False)[:1200])
-                  else:
-                      print('RAW COLUMNS: <NO RESULTS>')
+                  r=S.get(p,timeout=20,verify=False)
+                  print('PAGE',p,'status',r.status_code,'len',len(r.text))
+                  for m in re.findall(r'(?:src|href)=["\']([^"\']+\.(?:js|css)(?:\?[^"\']*)?)["\']', r.text):
+                      u=urljoin(p,m)
+                      if u not in js_urls:
+                          js_urls.append(u)
               except Exception as e:
-                  print('ERROR:', type(e).__name__, repr(e))
-          for code in ['801010', '801030']:
-              print('=' * 80)
-              print('ak.index_component_sw:', code)
+                  print('PAGE ERROR',p,type(e).__name__,repr(e))
+          print('asset count:',len(js_urls))
+          terms=['component_stocks','swindexcode','成分股','index_publish/details','stockcode','newweight']
+          for u in js_urls[:30]:
               try:
-                  df = ak.index_component_sw(symbol=code)
-                  print('rows:', len(df))
-                  print('columns:', list(df.columns))
+                  t=S.get(u,timeout=20,verify=False).text
+                  hits=[]
+                  for term in terms:
+                      pos=t.find(term)
+                      if pos>=0:
+                          hits.append(term)
+                  if hits:
+                      print('\nASSET HIT',u,'terms',hits,'len',len(t))
+                      for term in hits:
+                          pos=t.find(term)
+                          print('CTX',term, t[max(0,pos-250):pos+350].replace('\n',' ')[:900])
               except Exception as e:
-                  print('AKSHARE ERROR:', type(e).__name__, repr(e))
+                  print('ASSET ERROR',u,type(e).__name__,repr(e))
+          print('\n## PARAM PROBE')
+          base='https://www.swsresearch.com/institute-sw/api/index_publish/details/component_stocks/'
+          vals=['801010','801010.SI','sw801010','801010.SL']
+          names=['swindexcode','swIndexCode','indexcode','indexCode','index_code','swindex_code','code','symbol','secucode','stockcode']
+          for name in names:
+              for val in vals:
+                  params={name:val,'page':'1','page_size':'3'}
+                  try:
+                      r=S.get(base,params=params,timeout=20,verify=False)
+                      txt=r.text[:180]
+                      try:
+                          j=r.json(); data=j.get('data') if isinstance(j,dict) else None; res=data.get('results') if isinstance(data,dict) else None; n=len(res) if hasattr(res,'__len__') else None
+                      except Exception:
+                          n=None
+                      if n not in (0,None) or name in ['swindexcode','indexcode','indexCode','code']:
+                          print('TEST',params,'status',r.status_code,'results_len',n,'head',txt)
+                          if n:
+                              df=pd.DataFrame(res); print('COLUMNS',list(df.columns)); print('ROW',json.dumps(res[0],ensure_ascii=False)[:1000])
+                  except Exception as e:
+                      print('TEST ERROR',params,type(e).__name__,repr(e))
+          print('\n## NEARBY API PROBE')
+          paths=['/institute-sw/api/index_publish/details/','/institute-sw/api/index_publish/details/index_info/','/institute-sw/api/index_publish/details/basic_info/','/institute-sw/api/index_publish/details/component_stocks/','/institute-sw/api/index_publish/details/weight_stocks/']
+          for path in paths:
+              url=urljoin('https://www.swsresearch.com',path)
+              try:
+                  r=S.get(url,params={'swindexcode':'801010','page':'1','page_size':'3'},timeout=20,verify=False)
+                  print('PATH',path,'status',r.status_code,'ctype',r.headers.get('content-type'),'head',r.text[:250])
+              except Exception as e:
+                  print('PATH ERROR',path,type(e).__name__,repr(e))
           PY
-          echo "Diagnostic complete; stopping before snapshot/update/commit."
+          echo "Probe complete; stopping before snapshot/update/commit."
           exit 1
 
       - name: Update snapshot
