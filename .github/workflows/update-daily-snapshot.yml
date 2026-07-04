@@ -23,6 +23,8 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout
@@ -46,10 +48,21 @@ jobs:
       - name: Update snapshot
         run: |
           if [ -n "${{ inputs.target_date }}" ]; then
-            python scripts/update_daily_snapshot.py --target-date "${{ inputs.target_date }}" --force --skip-avix
+            python scripts/update_daily_snapshot_production.py --target-date "${{ inputs.target_date }}" --force --skip-avix
           else
-            python scripts/update_daily_snapshot.py --force --skip-avix
+            python scripts/update_daily_snapshot_production.py --force --skip-avix
           fi
+
+      - name: Upload daily snapshot diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-snapshot-diagnostics
+          path: |
+            data/update_status.json
+            data/processed_sw_cache.csv
+            data/sw_constituents_mapping.json
+          if-no-files-found: ignore
 
       - name: Build live recommendation ledger
         run: |
@@ -59,7 +72,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/latest_snapshot.json data/update_status.json data/recommendation_state.json data/history data/avix data/backtest data/*.csv
+          git add data/latest_snapshot.json data/update_status.json data/recommendation_state.json data/sw_constituents_mapping.json data/history data/avix data/backtest data/*.csv
           if git diff --cached --quiet; then
             echo "No data changes to commit."
           else
