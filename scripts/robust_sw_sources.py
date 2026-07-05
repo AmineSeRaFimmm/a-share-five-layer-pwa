@@ -106,6 +106,39 @@ def _write_constituents_cache(mapping: Dict[str, List[str]]) -> None:
         _log(f"write constituents cache failed: {exc}")
 
 
+def _build_neutral_constituents_fallback() -> Dict[str, List[str]]:
+    """
+    Last-resort production fallback when SW constituent sources are unavailable.
+
+    Each SW sector receives one valid A-share code from the current/cached A-share
+    snapshot. This makes coverage non-zero, but keeps len(pcts) <= 5 inside
+    utils.get_processed_sw_data(), so micro_factor remains neutral at 1.0 and
+    micro breadth labels are effectively disabled instead of being faked.
+    """
+    try:
+        spot = utils._read_a_share_snapshot_cache()
+        if not isinstance(spot, pd.DataFrame) or spot.empty:
+            spot = _retry(utils._fetch_eastmoney_a_share_close_snapshot, "neutral constituent fallback A-share snapshot", times=2)
+        if not isinstance(spot, pd.DataFrame) or spot.empty or "代码" not in spot.columns:
+            return {}
+        codes = sorted({code for code in (_normalise_code(c) for c in spot["代码"].tolist()) if code})
+        if not codes:
+            return {}
+        fallback = {
+            name: [codes[idx % len(codes)]]
+            for idx, name in enumerate(utils.SW_CODE_MAPPING.keys())
+        }
+        _log(
+            "constituents using NEUTRAL FALLBACK: "
+            f"sectors={len(fallback)}, total_placeholder_codes={sum(len(v) for v in fallback.values())}; "
+            "micro breadth disabled, micro_factor remains neutral"
+        )
+        return fallback
+    except Exception as exc:
+        _log(f"neutral constituents fallback failed: {exc}")
+        return {}
+
+
 def fetch_sw_constituents_mapping_latest() -> Dict[str, List[str]]:
     mapping: Dict[str, List[str]] = {}
     for name, code in utils.SW_CODE_MAPPING.items():
@@ -133,6 +166,15 @@ def fetch_sw_constituents_mapping_latest() -> Dict[str, List[str]]:
     if len(cached) >= MIN_CONST_SECTORS and cached_codes >= MIN_CONST_CODES:
         _log(f"constituents live partial sectors={len(mapping)}, using static cache sectors={len(cached)}, codes={cached_codes}")
         return cached
+
+    neutral = _build_neutral_constituents_fallback()
+    neutral_codes = sum(len(v) for v in neutral.values())
+    if len(neutral) >= len(utils.SW_CODE_MAPPING) and neutral_codes > 0:
+        _log(
+            f"constituents live/cache unavailable: live sectors={len(mapping)}, codes={total_codes}; "
+            f"cache sectors={len(cached)}, codes={cached_codes}; using neutral fallback"
+        )
+        return neutral
 
     _log(f"constituents insufficient: live sectors={len(mapping)}, codes={total_codes}; cache sectors={len(cached)}, codes={cached_codes}")
     return mapping
