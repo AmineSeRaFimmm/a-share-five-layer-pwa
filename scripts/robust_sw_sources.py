@@ -55,7 +55,7 @@ def _extract_codes(df: pd.DataFrame) -> List[str]:
     if df is None or df.empty:
         return []
     preferred = [
-        "证券代码", "代码", "成分券代码", "stock_code", "code", "成分代码",
+        "证券代码", "股票代码", "代码", "成分券代码", "stock_code", "code", "成分代码",
         "证券代码Constituent Code", "SECURITY_CODE", "成份券代码",
     ]
     col = next((c for c in preferred if c in df.columns), None)
@@ -116,9 +116,11 @@ def _build_neutral_constituents_fallback() -> Dict[str, List[str]]:
     micro breadth labels are effectively disabled instead of being faked.
     """
     try:
-        spot = utils._read_a_share_snapshot_cache()
+        spot = _retry(utils.fetch_all_a_shares_spot, "neutral constituent fallback A-share spot", times=2)
         if not isinstance(spot, pd.DataFrame) or spot.empty:
             spot = _retry(utils._fetch_eastmoney_a_share_close_snapshot, "neutral constituent fallback A-share snapshot", times=2)
+        if not isinstance(spot, pd.DataFrame) or spot.empty:
+            spot = utils._read_a_share_snapshot_cache()
         if not isinstance(spot, pd.DataFrame) or spot.empty or "代码" not in spot.columns:
             return {}
         codes = sorted({code for code in (_normalise_code(c) for c in spot["代码"].tolist()) if code})
@@ -142,12 +144,13 @@ def _build_neutral_constituents_fallback() -> Dict[str, List[str]]:
 def fetch_sw_constituents_mapping_latest() -> Dict[str, List[str]]:
     mapping: Dict[str, List[str]] = {}
     for name, code in utils.SW_CODE_MAPPING.items():
-        candidates: List[Tuple[str, Callable[[], pd.DataFrame]]] = [
-            (f"index_stock_cons_sw({code})", lambda code=code: ak.index_stock_cons_sw(symbol=code)),
+        candidates: List[Tuple[str, Callable[[], pd.DataFrame]]] = []
+        if hasattr(ak, "index_stock_cons_sw"):
+            candidates.append((f"index_stock_cons_sw({code})", lambda code=code: ak.index_stock_cons_sw(symbol=code)))
+        candidates.extend([
             (f"index_component_sw({code})", lambda code=code: ak.index_component_sw(symbol=code)),
-            (f"index_component_sw(sw{code})", lambda code=code: ak.index_component_sw(symbol=f"sw{code}")),
             (f"stock_board_industry_cons_em({name})", lambda name=name: ak.stock_board_industry_cons_em(symbol=name)),
-        ]
+        ])
         for label, fn in candidates:
             df = _retry(fn, f"constituents {name} {label}", times=2)
             codes = _extract_codes(df) if isinstance(df, pd.DataFrame) else []
