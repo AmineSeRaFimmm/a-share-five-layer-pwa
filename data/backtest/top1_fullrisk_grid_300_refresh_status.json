@@ -1,10 +1,10 @@
 {
-  "updated_at": "2026-07-10 00:55:22",
+  "updated_at": "2026-07-10 21:28:50",
   "status": "ready",
   "mode": "regenerated",
   "reason": "300-day full-risk grid regenerated successfully",
   "official_metadata": {
-    "generated_at": "2026-07-10 00:55:22",
+    "generated_at": "2026-07-10 21:28:50",
     "status": "ready",
     "update_mode": "promote",
     "promoted": true,
@@ -14,8 +14,8 @@
     "lookback_days": 300,
     "warmup_days": 90,
     "min_sectors_per_day": 20,
-    "first_trade_date": "2025-04-11",
-    "last_trade_date": "2026-07-07",
+    "first_trade_date": "2025-04-14",
+    "last_trade_date": "2026-07-08",
     "observed_trade_days": 300,
     "observed_sectors": 31,
     "grid_size": 384,
