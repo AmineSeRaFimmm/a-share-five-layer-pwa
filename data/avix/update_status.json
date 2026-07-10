@@ -1,9 +1,9 @@
 {
   "status": "ready",
   "reason": "AVIX 缓存更新成功",
-  "updated_at": "2026-07-10 15:03:10",
+  "updated_at": "2026-07-10 18:29:36",
   "latest": {
-    "valuation_time": "2026-07-10 15:02:25",
+    "valuation_time": "2026-07-10 18:29:04",
     "trade_date": "2026-07-10",
     "avix": 20.8532,
     "var30": 0.0434857353606258,
@@ -25,5 +25,5 @@
     "note": "正常双期限插值",
     "source": "CLOSE_MID"
   },
-  "signal_latest_trade_date": "2026-07-09"
+  "signal_latest_trade_date": "2026-07-10"
 }
