@@ -1,9 +1,9 @@
 {
-  "as_of_trade_date": "2026-07-14",
-  "updated_at": "2026-07-14 20:56:44",
-  "market_breadth": 0.9032258064516129,
+  "as_of_trade_date": "2026-07-15",
+  "updated_at": "2026-07-15 21:04:22",
+  "market_breadth": 0.6129032258064516,
   "position_state": "holding",
-  "last_action": "buy",
+  "last_action": "hold",
   "holdings": [
     {
       "板块名称": "基础化工",
