@@ -1,10 +1,10 @@
 {
-  "updated_at": "2026-07-20 21:37:22",
+  "updated_at": "2026-07-21 00:12:57",
   "status": "ready",
   "mode": "regenerated",
   "reason": "300-day full-risk grid regenerated successfully",
   "official_metadata": {
-    "generated_at": "2026-07-20 21:37:22",
+    "generated_at": "2026-07-21 00:12:57",
     "status": "ready",
     "update_mode": "promote",
     "promoted": true,
@@ -41,7 +41,7 @@
       "最长连续亏损": 8.0,
       "持仓占比": 0.6566666666666666
     },
-    "compare_status": "mismatch_requires_review",
+    "compare_status": "match_within_tolerance",
     "outputs": {
       "candidate_results": "data/backtest/top1_fullrisk_grid_300_results_candidate.csv",
       "candidate_top20": "data/backtest/top1_fullrisk_grid_300_top20_candidate.csv",
