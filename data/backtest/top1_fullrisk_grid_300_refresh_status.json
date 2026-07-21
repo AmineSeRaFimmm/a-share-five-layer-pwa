@@ -1,10 +1,10 @@
 {
-  "updated_at": "2026-07-21 00:12:57",
+  "updated_at": "2026-07-21 21:02:52",
   "status": "ready",
   "mode": "regenerated",
   "reason": "300-day full-risk grid regenerated successfully",
   "official_metadata": {
-    "generated_at": "2026-07-21 00:12:57",
+    "generated_at": "2026-07-21 21:02:52",
     "status": "ready",
     "update_mode": "promote",
     "promoted": true,
@@ -14,8 +14,8 @@
     "lookback_days": 300,
     "warmup_days": 90,
     "min_sectors_per_day": 20,
-    "first_trade_date": "2025-04-23",
-    "last_trade_date": "2026-07-17",
+    "first_trade_date": "2025-04-24",
+    "last_trade_date": "2026-07-20",
     "observed_trade_days": 300,
     "observed_sectors": 31,
     "grid_size": 384,
@@ -36,7 +36,7 @@
       "交易次数": 86.0,
       "交易胜率": 0.6046511627906976,
       "日胜率": 0.5177664974619289,
-      "相对胜率": 0.49333333333333335,
+      "相对胜率": 0.49,
       "profit_factor": 3.1136184531000874,
       "最长连续亏损": 8.0,
       "持仓占比": 0.6566666666666666
