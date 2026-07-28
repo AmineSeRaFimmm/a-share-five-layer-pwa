@@ -1,9 +1,9 @@
 {
-  "as_of_trade_date": "2026-07-27",
-  "updated_at": "2026-07-28 00:37:53",
-  "market_breadth": 0.9354838709677419,
+  "as_of_trade_date": "2026-07-28",
+  "updated_at": "2026-07-28 21:11:57",
+  "market_breadth": 0.3870967741935484,
   "position_state": "holding",
-  "last_action": "buy",
+  "last_action": "hold",
   "holdings": [
     {
       "板块名称": "轻工制造",
