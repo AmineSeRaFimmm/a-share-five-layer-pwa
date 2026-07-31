@@ -1,22 +1,22 @@
 {
-  "status": "ready_from_cache",
-  "reason": "实时刷新失败，已保留最近缓存：('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-  "updated_at": "2026-07-31 14:31:39",
+  "status": "ready",
+  "reason": "AVIX 缓存更新成功",
+  "updated_at": "2026-07-31 17:51:46",
   "latest": {
-    "valuation_time": "2026-07-31 13:05:01",
+    "valuation_time": "2026-07-31 17:51:08",
     "trade_date": "2026-07-31",
-    "avix": 23.5754,
-    "var30": 0.0555797454894197,
+    "avix": 22.9669,
+    "var30": 0.0527477503477313,
     "near_expiry": "2026-08-21",
     "next_expiry": "2026-09-18",
     "near_dte": 21,
     "next_dte": 49,
-    "near_var": 0.0594779614280509,
-    "next_var": 0.0520527882116104,
-    "near_forward": 4586.589047910317,
-    "next_forward": 4563.82639082716,
+    "near_var": 0.0551533280580952,
+    "next_var": 0.0505712752764498,
+    "near_forward": 4566.013077122009,
+    "next_forward": 4542.686039634908,
     "near_k0": 4550.0,
-    "next_k0": 4550.0,
+    "next_k0": 4500.0,
     "near_n_options": 26,
     "next_n_options": 28,
     "near_rate": 0.0141999999999999,
@@ -25,5 +25,5 @@
     "note": "正常双期限插值",
     "source": "CLOSE_MID"
   },
-  "signal_latest_trade_date": "2026-07-30"
+  "signal_latest_trade_date": "2026-07-31"
 }
