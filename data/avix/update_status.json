@@ -1,7 +1,7 @@
 {
-  "status": "ready",
-  "reason": "AVIX 缓存更新成功",
-  "updated_at": "2026-07-31 13:05:46",
+  "status": "ready_from_cache",
+  "reason": "实时刷新失败，已保留最近缓存：('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+  "updated_at": "2026-07-31 14:31:39",
   "latest": {
     "valuation_time": "2026-07-31 13:05:01",
     "trade_date": "2026-07-31",
