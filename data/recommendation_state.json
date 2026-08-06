@@ -1,9 +1,9 @@
 {
-  "as_of_trade_date": "2026-08-05",
-  "updated_at": "2026-08-05 23:33:49",
-  "market_breadth": 0.8387096774193549,
+  "as_of_trade_date": "2026-08-06",
+  "updated_at": "2026-08-06 21:14:23",
+  "market_breadth": 0.4838709677419355,
   "position_state": "holding",
-  "last_action": "buy",
+  "last_action": "hold",
   "holdings": [
     {
       "板块名称": "交通运输",

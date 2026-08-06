@@ -1,10 +1,10 @@
 {
-  "updated_at": "2026-08-05 23:39:46",
+  "updated_at": "2026-08-06 21:22:19",
   "status": "ready",
   "mode": "regenerated",
   "reason": "300-day full-risk grid regenerated successfully",
   "official_metadata": {
-    "generated_at": "2026-08-05 23:39:46",
+    "generated_at": "2026-08-06 21:22:19",
     "status": "ready",
     "update_mode": "promote",
     "promoted": true,
