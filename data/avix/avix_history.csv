@@ -1,4 +1,4 @@
-valuation_time,trade_date,avix,var30,near_expiry,next_expiry,near_dte,next_dte,near_var,next_var,near_forward,next_forward,near_k0,next_k0,near_n_options,next_n_options,near_rate,next_rate,quality,note,source
+﻿valuation_time,trade_date,avix,var30,near_expiry,next_expiry,near_dte,next_dte,near_var,next_var,near_forward,next_forward,near_k0,next_k0,near_n_options,next_n_options,near_rate,next_rate,quality,note,source
 2019-12-24 00:00:00,2019-12-24,14.0989,0.0198779689023265,2020-02-21,2020-03-20,59,87,0.0234523474530426,0.0246423902523297,4012.661538846909,4013.57775814464,4000.0,4000.0,19,19,0.03014125,0.03031625,WARN,期限未夹住30日,HIST_CLEAN_SURFACE
 2019-12-25 00:00:00,2019-12-25,13.1624,0.017324883895523,2020-02-21,2020-03-20,58,86,0.0222270929853996,0.0239371659237287,4012.416924822629,4012.088027710975,4000.0,4000.0,19,19,0.030135,0.03031,WARN,期限未夹住30日,HIST_CLEAN_SURFACE
 2019-12-26 00:00:00,2019-12-26,12.1574,0.014780226156675,2020-02-21,2020-03-20,57,85,0.0214653192745477,0.0239121507425272,4041.247425323365,4043.760416493848,4000.0,4000.0,19,19,0.03012875,0.03030375,WARN,期限未夹住30日,HIST_CLEAN_SURFACE
