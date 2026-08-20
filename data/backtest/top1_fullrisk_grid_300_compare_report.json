@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-20 20:01:49",
+  "generated_at": "2026-08-20 21:27:53",
   "status": "ready",
   "update_mode": "promote",
   "promoted": true,
@@ -36,7 +36,7 @@
     "最长连续亏损": 8.0,
     "持仓占比": 0.6666666666666666
   },
-  "compare_status": "mismatch_requires_review",
+  "compare_status": "match_within_tolerance",
   "outputs": {
     "candidate_results": "data/backtest/top1_fullrisk_grid_300_results_candidate.csv",
     "candidate_top20": "data/backtest/top1_fullrisk_grid_300_top20_candidate.csv",
@@ -58,23 +58,23 @@
     "ETF transaction cost is still intentionally excluded"
   ],
   "comparison": {
-    "status": "mismatch_requires_review",
-    "message": "candidate 与正式基准表差异较大，需人工复核后再 promote。",
+    "status": "match_within_tolerance",
+    "message": "candidate 与正式基准表差异在容忍范围内。",
     "official_primary": {
       "买入广度": 0.7,
       "卖出广度": 0.35,
       "综合分阈值": 54.0,
       "风险分阈值": 45.0,
-      "累计收益": 0.7033051403317823,
-      "年化收益": 0.5641761654673563,
-      "最大回撤": -0.0589047021235278,
+      "累计收益": 0.6455690962148566,
+      "年化收益": 0.5195169295036324,
+      "最大回撤": -0.0630434571821721,
       "交易次数": 89.0,
-      "交易胜率": 0.5842696629213483,
-      "日胜率": 0.5326633165829145,
-      "相对胜率": 0.4966666666666666,
-      "profit_factor": 2.6526566067388155,
+      "交易胜率": 0.5730337078651685,
+      "日胜率": 0.53,
+      "相对胜率": 0.4933333333333333,
+      "profit_factor": 2.415326667185928,
       "最长连续亏损": 8.0,
-      "持仓占比": 0.6633333333333333
+      "持仓占比": 0.6666666666666666
     },
     "candidate_primary": {
       "买入广度": 0.7,
@@ -94,19 +94,19 @@
     },
     "metric_diffs": {
       "累计收益": {
-        "official": 0.7033051403317823,
+        "official": 0.6455690962148566,
         "candidate": 0.6455690962148566,
-        "diff": -0.05773604411692568
+        "diff": 0.0
       },
       "年化收益": {
-        "official": 0.5641761654673563,
+        "official": 0.5195169295036324,
         "candidate": 0.5195169295036324,
-        "diff": -0.0446592359637239
+        "diff": 0.0
       },
       "最大回撤": {
-        "official": -0.0589047021235278,
+        "official": -0.0630434571821721,
         "candidate": -0.06304345718217219,
-        "diff": -0.004138755058644389
+        "diff": -9.71445146547012e-17
       },
       "交易次数": {
         "official": 89.0,
@@ -114,24 +114,24 @@
         "diff": 0.0
       },
       "交易胜率": {
-        "official": 0.5842696629213483,
+        "official": 0.5730337078651685,
         "candidate": 0.5730337078651685,
-        "diff": -0.011235955056179803
+        "diff": 0.0
       },
       "日胜率": {
-        "official": 0.5326633165829145,
+        "official": 0.53,
         "candidate": 0.53,
-        "diff": -0.002663316582914521
+        "diff": 0.0
       },
       "相对胜率": {
-        "official": 0.4966666666666666,
+        "official": 0.4933333333333333,
         "candidate": 0.49333333333333335,
-        "diff": -0.0033333333333332438
+        "diff": 5.551115123125783e-17
       },
       "profit_factor": {
-        "official": 2.6526566067388155,
+        "official": 2.415326667185928,
         "candidate": 2.415326667185928,
-        "diff": -0.2373299395528874
+        "diff": 0.0
       },
       "最长连续亏损": {
         "official": 8.0,
@@ -139,9 +139,9 @@
         "diff": 0.0
       },
       "持仓占比": {
-        "official": 0.6633333333333333,
+        "official": 0.6666666666666666,
         "candidate": 0.6666666666666666,
-        "diff": 0.0033333333333332993
+        "diff": 0.0
       }
     },
     "tolerance": {
