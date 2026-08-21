@@ -1,9 +1,9 @@
 {
-  "as_of_trade_date": "2026-08-20",
-  "updated_at": "2026-08-20 23:01:12",
-  "market_breadth": 0.7741935483870968,
+  "as_of_trade_date": "2026-08-21",
+  "updated_at": "2026-08-21 19:52:45",
+  "market_breadth": 0.5161290322580645,
   "position_state": "holding",
-  "last_action": "buy",
+  "last_action": "hold",
   "holdings": [
     {
       "板块名称": "建筑装饰",
