@@ -1,7 +1,7 @@
 {
-  "status": "ready",
-  "reason": "AVIX 缓存更新成功",
-  "updated_at": "2026-08-25 15:55:53",
+  "status": "ready_from_cache",
+  "reason": "实时刷新失败，已保留最近缓存：('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))",
+  "updated_at": "2026-08-26 10:16:28",
   "latest": {
     "valuation_time": "2026-08-25 15:55:03",
     "trade_date": "2026-08-25",
@@ -25,5 +25,5 @@
     "note": "正常双期限插值",
     "source": "CLOSE_MID"
   },
-  "signal_latest_trade_date": "2026-08-24"
+  "signal_latest_trade_date": "2026-08-25"
 }
