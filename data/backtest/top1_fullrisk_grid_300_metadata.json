@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-16 23:39:36",
+  "generated_at": "2026-09-17 23:50:15",
   "status": "ready",
   "update_mode": "promote",
   "promoted": true,
@@ -9,8 +9,8 @@
   "lookback_days": 300,
   "warmup_days": 90,
   "min_sectors_per_day": 20,
-  "first_trade_date": "2025-06-26",
-  "last_trade_date": "2026-09-15",
+  "first_trade_date": "2025-06-27",
+  "last_trade_date": "2026-09-16",
   "observed_trade_days": 300,
   "observed_sectors": 31,
   "grid_size": 384,
@@ -31,12 +31,12 @@
     "交易次数": 87.0,
     "交易胜率": 0.5402298850574713,
     "日胜率": 0.535,
-    "相对胜率": 0.48333333333333334,
+    "相对胜率": 0.4866666666666667,
     "profit_factor": 2.334460045099858,
     "最长连续亏损": 8.0,
     "持仓占比": 0.6666666666666666
   },
-  "compare_status": "mismatch_requires_review",
+  "compare_status": "match_within_tolerance",
   "outputs": {
     "candidate_results": "data/backtest/top1_fullrisk_grid_300_results_candidate.csv",
     "candidate_top20": "data/backtest/top1_fullrisk_grid_300_top20_candidate.csv",
