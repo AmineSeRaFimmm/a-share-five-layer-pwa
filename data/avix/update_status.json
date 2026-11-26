@@ -1,9 +1,9 @@
 {
   "status": "ready",
   "reason": "AVIX 缓存更新成功",
-  "updated_at": "2026-11-26 18:00:01",
+  "updated_at": "2026-11-26 21:04:20",
   "latest": {
-    "valuation_time": "2026-11-26 17:59:12",
+    "valuation_time": "2026-11-26 21:03:11",
     "trade_date": "2026-11-26",
     "avix": 20.625,
     "var30": 0.04253899609464868,
