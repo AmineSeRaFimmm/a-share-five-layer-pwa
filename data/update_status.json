@@ -1,7 +1,7 @@
 {
-  "target_date": "2026-11-26",
-  "target_trade_date": "2026-11-26",
-  "last_attempt_at": "2026-11-27 04:18:09",
+  "target_date": "2026-11-27",
+  "target_trade_date": "2026-11-27",
+  "last_attempt_at": "2026-11-28 04:04:29",
   "status": "waiting_partial",
   "reason": "申万样本行业数据尚未全部更新",
   "latest_source_dates": {
